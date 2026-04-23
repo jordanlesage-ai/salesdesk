@@ -152,32 +152,6 @@ function readBase64(file) {
   });
 }
 
-/* ─── Extract text from first and last page of PDF ─── */
-async function extractPdfText(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const typedArray = new Uint8Array(e.target.result);
-        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-        const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
-        const numPages = pdf.numPages;
-        const pagesToRead = [1, Math.min(13, numPages)];
-        let text = "";
-        for (const pageNum of pagesToRead) {
-          const page = await pdf.getPage(pageNum);
-          const content = await page.getTextContent();
-          text += content.items.map(i=>i.str).join(" ") + "\n\n";
-        }
-        resolve(text);
-      } catch(err) { reject(err); }
-    };
-    reader.onerror = reject;
-    reader.readAsArrayBuffer(file);
-  });
-}
-
 /* ─── AI Extraction ─── */
 async function extractFromFile(file) {
   const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -192,8 +166,11 @@ async function extractFromFile(file) {
 Read dates in French or English. Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
-    const text = await extractPdfText(file);
-    messages = [{ role:"user", content:`Extract the sales order data from this document text. Return ONLY a JSON object.\n\n${text}` }];
+    const b64 = await readBase64(file);
+    messages = [{ role:"user", content:[
+      { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+      { type:"text", text:"Extract the sales order data from this document. Focus on: client name, order date, delivery date, total amount, and list of items. Return ONLY a JSON object." }
+    ]}];
   } else {
     const csv = await parseSpreadsheet(file);
     messages = [{ role:"user", content:`Extract the sales order data from this spreadsheet CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }];
@@ -359,14 +336,20 @@ function UploadTab({ onOrdersAdded, files, setFiles }) {
 
   const processOne = useCallback(async (entry) => {
     setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"processing"} : e));
-    try {
-      const data = await extractFromFile(entry.file);
-      const order = { id: Date.now()+Math.random(), fileName:entry.file.name, ...data };
-      onOrdersAdded(order);
-      setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"done"} : e));
-    } catch {
-      setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"error"} : e));
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 3000 * attempt));
+        const data = await extractFromFile(entry.file);
+        const order = { id: Date.now()+Math.random(), fileName:entry.file.name, ...data };
+        onOrdersAdded(order);
+        setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"done"} : e));
+        return;
+      } catch(err) {
+        lastError = err;
+      }
     }
+    setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"error", error:lastError?.message} : e));
   }, [onOrdersAdded]);
 
   const process = useCallback(async (newFiles) => {
@@ -422,12 +405,15 @@ function UploadTab({ onOrdersAdded, files, setFiles }) {
           <div style={dotStyle(f.status)}/>
           <span style={{ flex:1, color:T.text, fontSize:14, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
           {f.status === "error" ? (
-            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed</span>
-              <button onClick={()=>retry(f)}
-                style={{ padding:"3px 12px", borderRadius:20, border:`1px solid ${T.gold}`, background:"transparent", color:T.gold, cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:T.font }}>
-                Retry
-              </button>
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed</span>
+                <button onClick={()=>retry(f)}
+                  style={{ padding:"3px 12px", borderRadius:20, border:`1px solid ${T.gold}`, background:"transparent", color:T.gold, cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:T.font }}>
+                  Retry
+                </button>
+              </div>
+              {f.error && <span style={{ fontSize:11, color:T.overdue, maxWidth:200, textAlign:"right" }}>{f.error}</span>}
             </div>
           ) : (
             <span style={{ fontSize:12, color: f.status==="done"?T.upcoming:T.gold, fontWeight:600 }}>
