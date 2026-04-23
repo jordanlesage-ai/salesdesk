@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
 
-/* ─── Load Clerk ─── */
+/* âââ Load Clerk âââ */
 let clerkInstance = null;
 async function getClerk() {
   if (clerkInstance) return clerkInstance;
@@ -20,16 +20,14 @@ async function getClerk() {
   await window.Clerk.load();
   clerkInstance = window.Clerk;
   return clerkInstance;
-<<<<<<< HEAD
-}
 
-/* ─── Google Font ─── */
+/* âââ Google Font âââ */
 const fontLink = document.createElement("link");
 fontLink.rel = "stylesheet";
 fontLink.href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap";
 document.head.appendChild(fontLink);
 
-/* ─── Design Tokens ─── */
+/* âââ Design Tokens âââ */
 const T = {
   bg: "#0f1117",
   card: "#181c27",
@@ -45,8 +43,8 @@ const T = {
   font: "'DM Sans', sans-serif",
 };
 
-/* ─── Helpers ─── */
-const FR_MONTHS = { janvier:1,février:2,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,août:8,aout:8,septembre:9,octobre:10,novembre:11,décembre:12,decembre:12 };
+/* âââ Helpers âââ */
+const FR_MONTHS = { janvier:1,fÃ©vrier:2,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,aoÃ»t:8,aout:8,septembre:9,octobre:10,novembre:11,dÃ©cembre:12,decembre:12 };
 const EN_MONTHS = { january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12 };
 
 function sanitizeDate(raw) {
@@ -60,12 +58,12 @@ function sanitizeDate(raw) {
   const dmy = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
   if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
 
-  // DD/MM or DD-MM (no year — assume current year)
+  // DD/MM or DD-MM (no year â assume current year)
   const dm = s.match(/^(\d{1,2})[-/.](\d{1,2})$/);
   if (dm) return `${new Date().getFullYear()}-${dm[2].padStart(2,"0")}-${dm[1].padStart(2,"0")}`;
 
-  // "30 avril2026" or "30avril2026" or "30 avril 2026" — day + month word + year (spaces optional)
-  const long = s.match(/^(\d{1,2})\s*([a-zA-ZÀ-ÿ]+)\s*(\d{4})$/i);
+  // "30 avril2026" or "30avril2026" or "30 avril 2026" â day + month word + year (spaces optional)
+  const long = s.match(/^(\d{1,2})\s*([a-zA-ZÃ-Ã¿]+)\s*(\d{4})$/i);
   if (long) {
     const mon = FR_MONTHS[long[2].toLowerCase()] || EN_MONTHS[long[2].toLowerCase()];
     if (mon) return `${long[3]}-${String(mon).padStart(2,"0")}-${long[1].padStart(2,"0")}`;
@@ -80,7 +78,7 @@ function todayStr() {
 }
 
 function fmtDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "â";
   const [y,m,d] = iso.split("-");
   return `${d}/${m}/${y}`;
 }
@@ -121,7 +119,7 @@ function statusLabel(s) {
   return { delivered:"Delivered", today:"Today", upcoming:"Upcoming", "no-date":"No Date" }[s] || "No Date";
 }
 
-/* ─── Excel serial → DD-MM-YYYY ─── */
+/* âââ Excel serial â DD-MM-YYYY âââ */
 function excelSerialToDate(serial) {
   const d = XLSX.SSF.parse_date_code(serial);
   if (!d) return String(serial);
@@ -132,7 +130,7 @@ function isDateSerial(val, cell) {
   return cell && cell.t === "n" && cell.z && /[ymd\/\-]/i.test(cell.z) && typeof val === "number";
 }
 
-/* ─── Parse spreadsheet ─── */
+/* âââ Parse spreadsheet âââ */
 function parseSpreadsheet(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -174,19 +172,19 @@ function readBase64(file) {
   });
 }
 
-/* ─── AI Extraction ─── */
+/* âââ AI Extraction âââ */
 async function extractFromFile(file) {
   const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   let messages;
 
-  const sysPrompt = `You are a sales document parser for Alimentation Première. The document text is split into labeled pages (=== PAGE 1 ===, === PAGE 13 ===, etc).
+  const sysPrompt = `You are a sales document parser for Alimentation PremiÃ¨re. The document text is split into labeled pages (=== PAGE 1 ===, === PAGE 13 ===, etc).
 
 Extract order data and return ONLY a JSON object with these exact keys:
-- client (string — client name from PAGE 1)
-- date (string, format DD/MM/YYYY — order date from PAGE 1)
-- deliveryDate (string in DD/MM/YYYY format, or null — first delivery date from PAGE 13, may be in French like "21 avril 2026")
-- total (number — from PAGE 13 only: find the single line "Total du concept alimentaire" and extract that one number. It appears ONCE. Do NOT add it to anything else. Do NOT use delivery amounts or weekly payments.)
-- items (array of strings — product names ordered)
+- client (string â client name from PAGE 1)
+- date (string, format DD/MM/YYYY â order date from PAGE 1)
+- deliveryDate (string in DD/MM/YYYY format, or null â first delivery date from PAGE 13, may be in French like "21 avril 2026")
+- total (number â from PAGE 13 only: find the single line "Total du concept alimentaire" and extract that one number. It appears ONCE. Do NOT add it to anything else. Do NOT use delivery amounts or weekly payments.)
+- items (array of strings â product names ordered)
 Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
@@ -243,7 +241,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
   };
 }
 
-/* ─── Reusable Atoms ─── */
+/* âââ Reusable Atoms âââ */
 function Card({ children, style }) {
   return <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:12, padding:20, ...style }}>{children}</div>;
 }
@@ -254,7 +252,7 @@ function Badge({ label, color, bg }) {
 
 function Empty({ msg }) {
   return <div style={{ textAlign:"center", color:T.muted, padding:"60px 0", fontSize:14 }}>
-    <div style={{ fontSize:32, marginBottom:8 }}>📂</div>
+    <div style={{ fontSize:32, marginBottom:8 }}>ð</div>
     {msg}
   </div>;
 }
@@ -274,7 +272,7 @@ function SidePanel({ title, onClose, children }) {
   return <div style={{ position:"fixed", top:0, right:0, width:420, height:"100%", background:T.card, borderLeft:`1px solid ${T.border}`, zIndex:1000, overflowY:"auto", boxShadow:"-8px 0 32px #00000060" }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"20px 24px 16px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:T.card, zIndex:1 }}>
       <span style={{ fontWeight:700, fontSize:16, color:T.text }}>{title}</span>
-      <button onClick={onClose} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, fontSize:18, cursor:"pointer", padding:"2px 10px" }}>✕</button>
+      <button onClick={onClose} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, fontSize:18, cursor:"pointer", padding:"2px 10px" }}>â</button>
     </div>
     <div style={{ padding:24 }}>{children}</div>
   </div>;
@@ -297,7 +295,7 @@ function PeriodRow({ label, revenue, commissionAmount, count, pct, onClick, isSe
   </div>;
 }
 
-/* ─── Stats Bar ─── */
+/* âââ Stats Bar âââ */
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function StatsBar({ orders, activeOrders }) {
@@ -321,7 +319,7 @@ function StatsBar({ orders, activeOrders }) {
     {/* Top row: 3 cards */}
     <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:12 }}>
       <Card style={{ padding:16 }}>
-        <div style={{ fontSize:18, marginBottom:4 }}>🧾</div>
+        <div style={{ fontSize:18, marginBottom:4 }}>ð§¾</div>
         <div style={{ fontSize:18, fontWeight:700, color:T.text }}>{fmtMoney(totalSales)}</div>
         <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Total Sales</div>
         <div style={{ marginTop:8, paddingTop:8, borderTop:`1px solid ${T.border}` }}>
@@ -330,12 +328,12 @@ function StatsBar({ orders, activeOrders }) {
         </div>
       </Card>
       <Card style={{ padding:16 }}>
-        <div style={{ fontSize:18, marginBottom:4 }}>🧑‍💼</div>
+        <div style={{ fontSize:18, marginBottom:4 }}>ð§âð¼</div>
         <div style={{ fontSize:22, fontWeight:700, color:T.gold }}>{clients}</div>
         <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Unique Clients</div>
       </Card>
       <Card style={{ padding:16 }}>
-        <div style={{ fontSize:18, marginBottom:4 }}>📋</div>
+        <div style={{ fontSize:18, marginBottom:4 }}>ð</div>
         <div style={{ fontSize:22, fontWeight:700, color:T.gold }}>{orders.length}</div>
         <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Orders Filed</div>
       </Card>
@@ -344,7 +342,7 @@ function StatsBar({ orders, activeOrders }) {
     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
       <Card style={{ padding:20, display:"flex", flexDirection:"column", justifyContent:"space-between" }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-          <span style={{ fontSize:18 }}>📅</span>
+          <span style={{ fontSize:18 }}>ð</span>
           <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>THIS WEEK</span>
         </div>
         <div>
@@ -358,7 +356,7 @@ function StatsBar({ orders, activeOrders }) {
       </Card>
       <Card style={{ padding:20, display:"flex", flexDirection:"column", justifyContent:"space-between", border:`1px solid ${T.gold}30` }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-          <span style={{ fontSize:18 }}>📆</span>
+          <span style={{ fontSize:18 }}>ð</span>
           <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>THIS MONTH</span>
         </div>
         <div>
@@ -374,7 +372,7 @@ function StatsBar({ orders, activeOrders }) {
   </div>;
 }
 
-/* ─── Upload Tab ─── */
+/* âââ Upload Tab âââ */
 function UploadTab({ onOrdersAdded, files, setFiles }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef();
@@ -437,7 +435,7 @@ function UploadTab({ onOrdersAdded, files, setFiles }) {
     <div onDragOver={e=>{e.preventDefault();setDragging(true)}} onDragLeave={()=>setDragging(false)} onDrop={onDrop}
       style={{ border:`2px dashed ${dragging ? T.gold : T.border}`, borderRadius:16, padding:"60px 40px", textAlign:"center", cursor:"pointer", transition:"border-color .2s", marginBottom:24, background: dragging ? `${T.gold}08` : "transparent" }}
       onClick={()=>inputRef.current.click()}>
-      <div style={{ fontSize:40, marginBottom:12 }}>📤</div>
+      <div style={{ fontSize:40, marginBottom:12 }}>ð¤</div>
       <div style={{ color:T.text, fontWeight:600, fontSize:16, marginBottom:6 }}>Drop files here or click to browse</div>
       <div style={{ color:T.muted, fontSize:13 }}>Supports PDF, Excel (.xlsx, .xls), CSV</div>
       <input ref={inputRef} type="file" multiple accept=".pdf,.xlsx,.xls,.csv" onChange={onPick} style={{ display:"none" }}/>
@@ -462,7 +460,7 @@ function UploadTab({ onOrdersAdded, files, setFiles }) {
             </div>
           ) : (
             <span style={{ fontSize:12, color: f.status==="done"?T.upcoming:T.gold, fontWeight:600 }}>
-              {f.status==="done"?"Extracted":"Processing…"}
+              {f.status==="done"?"Extracted":"Processingâ¦"}
             </span>
           )}
         </div>
@@ -471,7 +469,7 @@ function UploadTab({ onOrdersAdded, files, setFiles }) {
   </div>;
 }
 
-/* ─── All Orders Tab ─── */
+/* âââ All Orders Tab âââ */
 function AllOrdersTab({ orders, onDelete }) {
   if (!orders.length) return <Empty msg="No orders yet. Upload files to get started."/>;
   return <Card style={{ padding:0, overflow:"hidden" }}>
@@ -493,7 +491,7 @@ function AllOrdersTab({ orders, onDelete }) {
               <td style={{ padding:"12px 16px", whiteSpace:"nowrap" }}>
                 {o.deliveryDate
                   ? <span style={{ background:`${statusColor(ds)}20`, color:statusColor(ds), padding:"3px 10px", borderRadius:20, fontSize:12, fontWeight:600 }}>{fmtDate(o.deliveryDate)}</span>
-                  : <span style={{ color:T.muted, fontSize:12 }}>—</span>}
+                  : <span style={{ color:T.muted, fontSize:12 }}>â</span>}
               </td>
               <td style={{ padding:"12px 16px", maxWidth:200 }}>
                 {o.items.slice(0,3).map((it,i)=><Badge key={i} label={it} bg={T.border} color={T.text}/>)}
@@ -513,7 +511,7 @@ function AllOrdersTab({ orders, onDelete }) {
   </Card>;
 }
 
-/* ─── Period Tabs (Weekly/Monthly/Yearly) ─── */
+/* âââ Period Tabs (Weekly/Monthly/Yearly) âââ */
 function PeriodTab({ orders, mode }) {
   const [selected, setSelected] = useState(null);
 
@@ -598,7 +596,7 @@ function PeriodTab({ orders, mode }) {
               <div style={{ color:T.gold, fontWeight:700, fontSize:12 }}>{fmtMoney(commission(o.total))} comm.</div>
             </div>
           </div>
-          <div style={{ fontSize:12, color:T.muted }}>{fmtDate(o.date)}{o.deliveryDate ? ` → ${fmtDate(o.deliveryDate)}` : ""}</div>
+          <div style={{ fontSize:12, color:T.muted }}>{fmtDate(o.date)}{o.deliveryDate ? ` â ${fmtDate(o.deliveryDate)}` : ""}</div>
           <div style={{ marginTop:6 }}>{o.items.slice(0,2).map((it,i)=><Badge key={i} label={it} bg={T.border} color={T.text}/>)}</div>
         </div>
       ))}
@@ -607,7 +605,7 @@ function PeriodTab({ orders, mode }) {
   </div>;
 }
 
-/* ─── Clients Tab ─── */
+/* âââ Clients Tab âââ */
 function ClientsTab({ orders }) {
   const [search, setSearch] = useState("");
 
@@ -639,7 +637,7 @@ function ClientsTab({ orders }) {
       <input
         value={search}
         onChange={e=>setSearch(e.target.value)}
-        placeholder="Search clients…"
+        placeholder="Search clientsâ¦"
         style={{ width:"100%", padding:"10px 16px", borderRadius:10, border:`1px solid ${T.border}`, background:T.card, color:T.text, fontSize:14, fontFamily:T.font, outline:"none", boxSizing:"border-box" }}
       />
     </div>
@@ -680,7 +678,7 @@ function ClientsTab({ orders }) {
   </div>;
 }
 
-/* ─── Deliveries Tab ─── */
+/* âââ Deliveries Tab âââ */
 function DeliveriesTab({ orders, onToggleDeliveryCancel, onCancel }) {
   const [filter, setFilter] = useState("all");
 
@@ -785,7 +783,7 @@ function DeliveriesTab({ orders, onToggleDeliveryCancel, onCancel }) {
   </div>;
 }
 
-/* ─── Cancelled Tab ─── */
+/* âââ Cancelled Tab âââ */
 function CancelledTab({ orders, onRestore, onDelete }) {
   if (!orders.length) return <Empty msg="No cancelled orders."/>;
   const totalLost = orders.reduce((s,o)=>s+o.total,0);
@@ -837,7 +835,7 @@ function CancelledTab({ orders, onRestore, onDelete }) {
   </div>;
 }
 
-/* ─── Login Screen ─── */
+/* âââ Login Screen âââ */
 function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
@@ -874,14 +872,14 @@ function LoginScreen() {
             <path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5l-6.2-5.2C29.5 35.5 26.9 36 24 36c-5.2 0-9.7-2.7-11.3-7.1l-6.6 5.1C9.5 39.6 16.3 44 24 44z"/>
             <path fill="#1976D2" d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C41 35.2 44 30 44 24c0-1.3-.1-2.7-.4-4z"/>
           </svg>
-          {loading ? "Signing in…" : "Sign in with Google"}
+          {loading ? "Signing inâ¦" : "Sign in with Google"}
         </button>
       </div>
     </div>
   );
 }
 
-/* ─── Main App ─── */
+/* âââ Main App âââ */
 const TABS = ["Upload","All Orders","Weekly","Monthly","Yearly","Clients","Deliveries","Cancelled"];
 
 export default function SalesDesk() {
@@ -982,7 +980,7 @@ export default function SalesDesk() {
   // Auth loading
   if (user === undefined) return (
     <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
-      <div style={{ fontSize:13, color:T.muted }}>Loading…</div>
+      <div style={{ fontSize:13, color:T.muted }}>Loadingâ¦</div>
     </div>
   );
 
@@ -992,7 +990,7 @@ export default function SalesDesk() {
     <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
       <div style={{ textAlign:"center" }}>
         <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:8 }}>Sales<span style={{ color:T.gold }}>Desk</span></div>
-        <div style={{ fontSize:13, color:T.muted }}>Loading orders…</div>
+        <div style={{ fontSize:13, color:T.muted }}>Loading ordersâ¦</div>
       </div>
     </div>
   );
@@ -1020,7 +1018,7 @@ export default function SalesDesk() {
               }}
               style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${T.border}`,
                 background:T.card, color:T.text, fontSize:13, fontFamily:T.font, cursor:"pointer" }}>
-              <option value="">👤 My Orders</option>
+              <option value="">ð¤ My Orders</option>
               {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
             </select>
           )}
