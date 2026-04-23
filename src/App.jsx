@@ -157,12 +157,14 @@ async function extractFromFile(file) {
   const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   let messages;
 
-  const sysPrompt = `You are a sales document parser for Alimentation Première. Extract order data and return ONLY a JSON object with these exact keys:
-- client (string — the client name, e.g. "Hugo Lyons")
-- date (string, format DD/MM/YYYY — the order/contract date)
-- deliveryDate (string in DD/MM/YYYY format, or null — the first delivery date, may be written in French like "21 avril 2026")
-- total (number — find the line that says "Total du concept alimentaire" and use THAT number only. Do NOT use weekly payment amounts, do NOT double the number, do NOT use sub-totals.)
-- items (array of strings — list of products ordered with quantity > 0)
+  const sysPrompt = `You are a sales document parser for Alimentation Première. The document text is split into labeled pages (=== PAGE 1 ===, === PAGE 13 ===, etc).
+
+Extract order data and return ONLY a JSON object with these exact keys:
+- client (string — client name from PAGE 1)
+- date (string, format DD/MM/YYYY — order date from PAGE 1)
+- deliveryDate (string in DD/MM/YYYY format, or null — first delivery date from PAGE 13, may be in French like "21 avril 2026")
+- total (number — from PAGE 13 only: find the single line "Total du concept alimentaire" and extract that one number. It appears ONCE. Do NOT add it to anything else. Do NOT use delivery amounts or weekly payments.)
+- items (array of strings — product names ordered)
 Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
@@ -182,7 +184,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
           for (const pageNum of pagesToRead) {
             const page = await pdf.getPage(pageNum);
             const content = await page.getTextContent();
-            text += content.items.map(i => i.str).join(" ") + "\n\n";
+            text += `=== PAGE ${pageNum} ===\n` + content.items.map(i => i.str).join(" ") + "\n\n";
           }
           resolve(text);
         } catch(err) { reject(err); }
