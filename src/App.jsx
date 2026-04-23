@@ -20,6 +20,7 @@ async function getClerk() {
   await window.Clerk.load();
   clerkInstance = window.Clerk;
   return clerkInstance;
+<<<<<<< HEAD
 }
 
 /* ─── Google Font ─── */
@@ -1059,4 +1060,6 @@ export default function SalesDesk() {
       {tab==="Cancelled"  && <CancelledTab orders={cancelledOrders} onRestore={restoreOrder} onDelete={deleteOrder}/>}
     </div>
   );
+=======
+>>>>>>> dea594a27d708bf1d76db1f496a32dc2dcdee5bf
 }
