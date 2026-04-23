@@ -844,11 +844,7 @@ function LoginScreen() {
     setLoading(true);
     try {
       const clerk = await getClerk();
-      await clerk.signIn.authenticateWithRedirect({
-        strategy: "oauth_google",
-        redirectUrl: window.location.origin,
-        redirectUrlComplete: window.location.origin,
-      });
+   await clerk.signIn.authenticateWithRedirect({   
     } catch(err) {
       console.error(err);
       setLoading(false);
