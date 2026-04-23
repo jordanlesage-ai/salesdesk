@@ -18,14 +18,20 @@ export default async function handler(req, res) {
         "Content-Type": "application/json",
         "x-api-key": process.env.ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "pdfs-2024-09-25",
       },
       body: JSON.stringify(req.body),
     });
 
     const data = await response.json();
-    return res.status(response.status).json(data);
+
+    if (!response.ok) {
+      console.error("Anthropic error:", JSON.stringify(data));
+      return res.status(response.status).json(data);
+    }
+
+    return res.status(200).json(data);
   } catch (err) {
+    console.error("Handler error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
