@@ -893,7 +893,7 @@ export default function SalesDesk() {
           setUser(u || null);
           if (u) {
             try {
-              const t = await u.getIdToken();
+              const t = await clerk.session.getToken();
               setToken(t);
             } catch {}
           } else {
