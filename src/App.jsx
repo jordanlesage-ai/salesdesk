@@ -179,7 +179,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
           pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
           const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(e.target.result) }).promise;
           const numPages = pdf.numPages;
-          const pagesToRead = [...new Set([1, Math.min(13, numPages)])];
+          const pagesToRead = [...new Set([1, Math.min(14, numPages)])];
           let text = "";
           for (const pageNum of pagesToRead) {
             const page = await pdf.getPage(pageNum);
