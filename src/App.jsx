@@ -821,16 +821,16 @@ export default function SalesDesk() {
   const [uploadFiles, setUploadFiles] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Load orders from KV on startup
+  // Load orders from Redis on startup
   useEffect(() => {
     fetch("/api/orders")
       .then(r => r.json())
-      .then(data => { if (data.orders) setOrders(data.orders); })
+      .then(data => { if (Array.isArray(data.orders)) setOrders(data.orders); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  // Save orders to KV whenever they change
+  // Save orders to Redis whenever they change
   useEffect(() => {
     if (loading) return;
     fetch("/api/orders", {
