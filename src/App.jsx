@@ -152,9 +152,35 @@ function readBase64(file) {
   });
 }
 
+/* ─── Extract text from first and last page of PDF ─── */
+async function extractPdfText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const typedArray = new Uint8Array(e.target.result);
+        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
+        const numPages = pdf.numPages;
+        const pagesToRead = [1, Math.min(13, numPages)];
+        let text = "";
+        for (const pageNum of pagesToRead) {
+          const page = await pdf.getPage(pageNum);
+          const content = await page.getTextContent();
+          text += content.items.map(i=>i.str).join(" ") + "\n\n";
+        }
+        resolve(text);
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 /* ─── AI Extraction ─── */
 async function extractFromFile(file) {
-  const isPdf = file.type === "application/pdf";
+  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   let messages;
 
   const sysPrompt = `You are a sales document parser. Extract order data and return ONLY a JSON object with these exact keys:
@@ -166,11 +192,8 @@ async function extractFromFile(file) {
 Read dates in French or English. Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
-    const b64 = await readBase64(file);
-    messages = [{ role:"user", content:[
-      { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
-      { type:"text", text:"Extract the sales order data from this document. Return ONLY a JSON object." }
-    ]}];
+    const text = await extractPdfText(file);
+    messages = [{ role:"user", content:`Extract the sales order data from this document text. Return ONLY a JSON object.\n\n${text}` }];
   } else {
     const csv = await parseSpreadsheet(file);
     messages = [{ role:"user", content:`Extract the sales order data from this spreadsheet CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }];
