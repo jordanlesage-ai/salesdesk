@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 /* ─── Google Font ─── */
@@ -784,6 +784,26 @@ export default function SalesDesk() {
   const [orders, setOrders] = useState([]);
   const [tab, setTab] = useState("Upload");
   const [uploadFiles, setUploadFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load orders from KV on startup
+  useEffect(() => {
+    fetch("/api/orders")
+      .then(r => r.json())
+      .then(data => { if (data.orders) setOrders(data.orders); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Save orders to KV whenever they change
+  useEffect(() => {
+    if (loading) return;
+    fetch("/api/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orders }),
+    }).catch(() => {});
+  }, [orders, loading]);
 
   const addOrder = useCallback(order => setOrders(prev=>[...prev,order]), []);
   const deleteOrder = useCallback(id => setOrders(prev=>prev.filter(o=>o.id!==id)), []);
@@ -793,6 +813,15 @@ export default function SalesDesk() {
 
   const activeOrders = orders.filter(o=>!o.cancelled);
   const cancelledOrders = orders.filter(o=>o.cancelled);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:8 }}>Sales<span style={{ color:T.gold }}>Desk</span></div>
+        <div style={{ fontSize:13, color:T.muted }}>Loading your orders…</div>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.font, color:T.text, padding:"24px 28px" }}>
