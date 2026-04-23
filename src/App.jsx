@@ -584,6 +584,8 @@ function PeriodTab({ orders, mode }) {
 
 /* ─── Clients Tab ─── */
 function ClientsTab({ orders }) {
+  const [search, setSearch] = useState("");
+
   const clients = useMemo(() => {
     const map = {};
     orders.forEach(o => {
@@ -603,10 +605,22 @@ function ClientsTab({ orders }) {
   }, [orders]);
 
   const maxRev = clients[0]?.total || 1;
+  const filtered = clients.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
+
   if (!clients.length) return <Empty msg="No client data yet."/>;
 
-  return <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:12 }}>
-    {clients.map((c,i)=>(
+  return <div>
+    <div style={{ marginBottom:16 }}>
+      <input
+        value={search}
+        onChange={e=>setSearch(e.target.value)}
+        placeholder="Search clients…"
+        style={{ width:"100%", padding:"10px 16px", borderRadius:10, border:`1px solid ${T.border}`, background:T.card, color:T.text, fontSize:14, fontFamily:T.font, outline:"none", boxSizing:"border-box" }}
+      />
+    </div>
+    {filtered.length === 0 && <Empty msg="No clients match your search."/>}
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:12 }}>
+      {filtered.map((c,i)=>(
       <Card key={c.name}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
           <div>
@@ -637,6 +651,7 @@ function ClientsTab({ orders }) {
         </div>
       </Card>
     ))}
+    </div>
   </div>;
 }
 
