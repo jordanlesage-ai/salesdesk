@@ -179,9 +179,14 @@ Read dates in French or English. Return ONLY the JSON object, no markdown, no ex
   const resp = await fetch("/api/extract", {
     method:"POST",
     headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ model:"`claude-sonnet-4-20250514`", max_tokens:300, system:sysPrompt, messages })
+    body: JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1024, system:sysPrompt, messages })
   });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `API error ${resp.status}`);
+  }
   const data = await resp.json();
+  if (!data.content?.[0]?.text) throw new Error("Empty response from AI");
   const text = data.content[0].text.replace(/```json|```/g,"").trim();
   const parsed = JSON.parse(text);
   return {
