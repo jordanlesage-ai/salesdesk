@@ -157,13 +157,13 @@ async function extractFromFile(file) {
   const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   let messages;
 
-  const sysPrompt = `You are a sales document parser. Extract order data and return ONLY a JSON object with these exact keys:
-- client (string)
-- date (string, format DD/MM/YYYY)
-- deliveryDate (string in DD/MM/YYYY format, or null if not found)
-- total (number — this is the "Total du concept alimentaire" or the grand total of the order, no currency symbols)
-- items (array of strings)
-Read dates in French or English. The total is the overall contract total, NOT the weekly payment amount and NOT double the total. Return ONLY the JSON object, no markdown, no explanation.`;
+  const sysPrompt = `You are a sales document parser for Alimentation Première. Extract order data and return ONLY a JSON object with these exact keys:
+- client (string — the client name, e.g. "Hugo Lyons")
+- date (string, format DD/MM/YYYY — the order/contract date)
+- deliveryDate (string in DD/MM/YYYY format, or null — the first delivery date, may be written in French like "21 avril 2026")
+- total (number — find the line that says "Total du concept alimentaire" and use THAT number only. Do NOT use weekly payment amounts, do NOT double the number, do NOT use sub-totals.)
+- items (array of strings — list of products ordered with quantity > 0)
+Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
     const text = await new Promise((resolve, reject) => {
