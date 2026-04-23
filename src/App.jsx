@@ -17,7 +17,7 @@ async function getClerk() {
     document.head.appendChild(script);
   });
   // Frontend API script pre-initializes window.Clerk as an instance, just call load()
-  await window.Clerk.load({ routing: 'hash' });
+  await window.Clerk.load();
   clerkInstance = window.Clerk;
   return clerkInstance;
 }
