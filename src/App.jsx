@@ -161,9 +161,9 @@ async function extractFromFile(file) {
 - client (string)
 - date (string, format DD/MM/YYYY)
 - deliveryDate (string in DD/MM/YYYY format, or null if not found)
-- total (number, no currency symbols)
+- total (number — this is the "Total du concept alimentaire" or the grand total of the order, no currency symbols)
 - items (array of strings)
-Read dates in French or English. Return ONLY the JSON object, no markdown, no explanation.`;
+Read dates in French or English. The total is the overall contract total, NOT the weekly payment amount and NOT double the total. Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
     const text = await new Promise((resolve, reject) => {
