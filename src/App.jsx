@@ -1,6 +1,16 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
 
+/* ─── Load Clerk ─── */
+let clerkInstance = null;
+async function getClerk() {
+  if (clerkInstance) return clerkInstance;
+  const { Clerk } = await import("@clerk/clerk-js");
+  clerkInstance = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+  await clerkInstance.load();
+  return clerkInstance;
+}
+
 /* ─── Google Font ─── */
 const fontLink = document.createElement("link");
 fontLink.rel = "stylesheet";
@@ -179,7 +189,8 @@ Return ONLY the JSON object, no markdown, no explanation.`;
           pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
           const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(e.target.result) }).promise;
           const numPages = pdf.numPages;
-          const pagesToRead = [...new Set([1, Math.min(13, numPages), Math.min(14, numPages)])];
+          const lastPage = Math.min(numPages, 14);
+          const pagesToRead = [...new Set([1, lastPage])];
           let text = "";
           for (const pageNum of pagesToRead) {
             const page = await pdf.getPage(pageNum);
@@ -814,51 +825,160 @@ function CancelledTab({ orders, onRestore, onDelete }) {
   </div>;
 }
 
+/* ─── Login Screen ─── */
+function LoginScreen() {
+  const [loading, setLoading] = useState(false);
+
+  const signInWithGoogle = async () => {
+    setLoading(true);
+    try {
+      const clerk = await getClerk();
+      await clerk.signIn.authenticateWithRedirect({
+        strategy: "oauth_google",
+        redirectUrl: window.location.origin,
+        redirectUrlComplete: window.location.origin,
+      });
+    } catch(err) {
+      console.error(err);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
+      <div style={{ textAlign:"center", padding:40 }}>
+        <div style={{ fontSize:32, fontWeight:700, color:T.text, marginBottom:8, letterSpacing:"-0.5px" }}>
+          Sales<span style={{ color:T.gold }}>Desk</span>
+        </div>
+        <div style={{ fontSize:13, color:T.muted, marginBottom:40 }}>AI-Powered Sales File Manager</div>
+        <button onClick={signInWithGoogle} disabled={loading}
+          style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 28px", borderRadius:12,
+            background:"white", border:"none", cursor:loading?"not-allowed":"pointer", fontSize:15,
+            fontWeight:600, color:"#333", fontFamily:T.font, opacity:loading?0.7:1, margin:"0 auto",
+            boxShadow:"0 2px 12px rgba(0,0,0,0.3)" }}>
+          <svg width="20" height="20" viewBox="0 0 48 48">
+            <path fill="#FFC107" d="M43.6 20H24v8h11.3C33.7 33.3 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34.1 6.5 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20c11 0 20-8 20-20 0-1.3-.1-2.7-.4-4z"/>
+            <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 19 13 24 13c3 0 5.8 1.1 7.9 3l5.7-5.7C34.1 6.5 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5l-6.2-5.2C29.5 35.5 26.9 36 24 36c-5.2 0-9.7-2.7-11.3-7.1l-6.6 5.1C9.5 39.6 16.3 44 24 44z"/>
+            <path fill="#1976D2" d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C41 35.2 44 30 44 24c0-1.3-.1-2.7-.4-4z"/>
+          </svg>
+          {loading ? "Signing in…" : "Sign in with Google"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main App ─── */
 const TABS = ["Upload","All Orders","Weekly","Monthly","Yearly","Clients","Deliveries","Cancelled"];
 
 export default function SalesDesk() {
-  const [orders, setOrders] = useState([]);
-  const [tab, setTab] = useState("Upload");
+  const [user, setUser]               = useState(undefined); // undefined = loading
+  const [token, setToken]             = useState(null);
+  const [orders, setOrders]           = useState([]);
+  const [tab, setTab]                 = useState("Upload");
   const [uploadFiles, setUploadFiles] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]         = useState(true);
+  const [isAdmin, setIsAdmin]         = useState(false);
+  const [employees, setEmployees]     = useState([]);
+  const [viewingUser, setViewingUser] = useState(null);
 
-  // Load orders from Redis on startup
+  // Init Clerk auth
   useEffect(() => {
-    fetch("/api/orders")
-      .then(r => r.json())
-      .then(data => { if (Array.isArray(data.orders)) setOrders(data.orders); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    getClerk().then(clerk => {
+      const update = async () => {
+        const u = clerk.user;
+        setUser(u || null);
+        if (u) {
+          try {
+            const t = await u.getIdToken();
+            setToken(t);
+          } catch {}
+        } else {
+          setToken(null);
+        }
+      };
+      update();
+      clerk.addListener(update);
+    });
   }, []);
 
-  // Save orders to Redis whenever they change
+  const authFetch = useCallback((url, opts = {}) => {
+    return fetch(url, {
+      ...opts,
+      headers: { "Content-Type":"application/json", "Authorization":`Bearer ${token}`, ...(opts.headers||{}) }
+    });
+  }, [token]);
+
+  // Check admin status
   useEffect(() => {
-    if (loading) return;
-    fetch("/api/orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orders }),
-    }).catch(() => {});
-  }, [orders, loading]);
+    if (!token) return;
+    authFetch("/api/me")
+      .then(r => r.json())
+      .then(d => setIsAdmin(d.isAdmin || false))
+      .catch(() => {});
+  }, [token]);
 
-  const addOrder = useCallback(order => setOrders(prev=>[...prev,order]), []);
-  const deleteOrder = useCallback(id => setOrders(prev=>prev.filter(o=>o.id!==id)), []);
-  const cancelOrder = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o, cancelled:true} : o)), []);
-  const restoreOrder = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o, cancelled:false} : o)), []);
-  const toggleDeliveryCancel = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o, deliveryCancelled:!o.deliveryCancelled} : o)), []);
+  // Load employees (admin only)
+  useEffect(() => {
+    if (!isAdmin || !token) return;
+    authFetch("/api/orders", { method:"PUT" })
+      .then(r => r.json())
+      .then(d => setEmployees(d.users || []))
+      .catch(() => {});
+  }, [isAdmin, token]);
 
-  const activeOrders = orders.filter(o=>!o.cancelled);
-  const cancelledOrders = orders.filter(o=>o.cancelled);
+  // Load orders when user or viewingUser changes
+  useEffect(() => {
+    if (!token) return;
+    setLoading(true);
+    const url = isAdmin && viewingUser ? `/api/orders?userId=${viewingUser.id}` : "/api/orders";
+    authFetch(url)
+      .then(r => r.json())
+      .then(d => setOrders(Array.isArray(d.orders) ? d.orders : []))
+      .catch(() => setOrders([]))
+      .finally(() => setLoading(false));
+  }, [token, viewingUser]);
+
+  // Save orders
+  useEffect(() => {
+    if (loading || !token) return;
+    const body = isAdmin && viewingUser ? { orders, userId: viewingUser.id } : { orders };
+    authFetch("/api/orders", { method:"POST", body: JSON.stringify(body) }).catch(() => {});
+  }, [orders, loading, token]);
+
+  const addOrder     = useCallback(o  => setOrders(prev=>[...prev, o]), []);
+  const deleteOrder  = useCallback(id => setOrders(prev=>prev.filter(o=>o.id!==id)), []);
+  const cancelOrder  = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o,cancelled:true}  : o)), []);
+  const restoreOrder = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o,cancelled:false} : o)), []);
+
+  const activeOrders    = useMemo(()=>orders.filter(o=>!o.cancelled),  [orders]);
+  const cancelledOrders = useMemo(()=>orders.filter(o=>o.cancelled),   [orders]);
+
+  const signOut = async () => {
+    const clerk = await getClerk();
+    await clerk.signOut();
+  };
+
+  // Auth loading
+  if (user === undefined) return (
+    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
+      <div style={{ fontSize:13, color:T.muted }}>Loading…</div>
+    </div>
+  );
+
+  if (!user) return <LoginScreen/>;
 
   if (loading) return (
     <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
       <div style={{ textAlign:"center" }}>
         <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:8 }}>Sales<span style={{ color:T.gold }}>Desk</span></div>
-        <div style={{ fontSize:13, color:T.muted }}>Loading your orders…</div>
+        <div style={{ fontSize:13, color:T.muted }}>Loading orders…</div>
       </div>
     </div>
   );
+
+  const displayName = viewingUser?.name || user.firstName || user.emailAddresses?.[0]?.emailAddress || "You";
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.font, color:T.text, padding:"24px 28px" }}>
@@ -870,9 +990,30 @@ export default function SalesDesk() {
           </div>
           <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>AI-Powered Sales File Manager</div>
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ width:8, height:8, borderRadius:"50%", background:T.upcoming, boxShadow:`0 0 6px ${T.upcoming}` }}/>
-          <span style={{ fontSize:12, color:T.muted }}>AI Connected</span>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          {isAdmin && (
+            <select value={viewingUser?.id || ""}
+              onChange={e => {
+                const emp = employees.find(u => u.id === e.target.value);
+                setViewingUser(emp || null);
+                setOrders([]);
+                setTab("Upload");
+              }}
+              style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${T.border}`,
+                background:T.card, color:T.text, fontSize:13, fontFamily:T.font, cursor:"pointer" }}>
+              <option value="">👤 My Orders</option>
+              {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+            </select>
+          )}
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {user.imageUrl && <img src={user.imageUrl} style={{ width:28, height:28, borderRadius:"50%", border:`1px solid ${T.border}` }} />}
+            <span style={{ fontSize:12, color:T.muted }}>{displayName}</span>
+          </div>
+          <button onClick={signOut}
+            style={{ padding:"6px 14px", borderRadius:8, border:`1px solid ${T.border}`,
+              background:"none", color:T.muted, cursor:"pointer", fontSize:12, fontFamily:T.font }}>
+            Sign out
+          </button>
         </div>
       </div>
 
