@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 let clerkInstance = null;
 async function getClerk() {
   if (clerkInstance) return clerkInstance;
+<<<<<<< HEAD
   await new Promise((resolve, reject) => {
     if (window.Clerk) return resolve();
     const script = document.createElement("script");
@@ -17,6 +18,12 @@ async function getClerk() {
   await clerk.load();
   clerkInstance = clerk;
   return clerk;
+=======
+  const { Clerk } = await import("@clerk/clerk-js");
+  clerkInstance = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+  await clerkInstance.load();
+  return clerkInstance;
+>>>>>>> 2cf525a10ab6323e8043fa9da7bde4eccd32141e
 }
 
 /* ─── Google Font ─── */
