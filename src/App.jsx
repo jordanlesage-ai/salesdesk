@@ -840,15 +840,8 @@ function CancelledTab({ orders, onRestore, onDelete }) {
 function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
-  const signInWithGoogle = async () => {
-    setLoading(true);
-    try {
-      const clerk = await getClerk();
-   await clerk.signIn.authenticateWithRedirect({   
-    } catch(err) {
-      console.error(err);
-      setLoading(false);
-    }
+  const signInWithGoogle = () => {
+    window.location.href = "https://possible-peacock-8.accounts.dev/sign-in?redirect_url=" + encodeURIComponent(window.location.origin);
   };
 
   return (
