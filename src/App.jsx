@@ -891,16 +891,20 @@ export default function SalesDesk() {
         const update = async () => {
           const u = clerk.user;
           setUser(u || null);
-          if (u) {
+          if (u && clerk.session) {
             try {
               const t = await clerk.session.getToken();
               setToken(t);
-            } catch {}
+            } catch(e) {
+              console.error("token error:", e);
+              setToken(null);
+            }
           } else {
             setToken(null);
           }
         };
-        update();
+        // Wait a tick for session to be ready before first update
+        setTimeout(update, 500);
         clerk.addListener(update);
       } catch(err) {
         console.error("Clerk init error:", err);
