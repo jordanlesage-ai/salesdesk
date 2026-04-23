@@ -166,11 +166,31 @@ async function extractFromFile(file) {
 Read dates in French or English. Return ONLY the JSON object, no markdown, no explanation.`;
 
   if (isPdf) {
-    const b64 = await readBase64(file);
-    messages = [{ role:"user", content:[
-      { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
-      { type:"text", text:"Extract the sales order data from this document. Focus on: client name, order date, delivery date, total amount, and list of items. Return ONLY a JSON object." }
-    ]}];
+    const text = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+          await new Promise(r => { script.onload = r; document.head.appendChild(script); });
+          const pdfjsLib = window.pdfjsLib;
+          pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+          const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(e.target.result) }).promise;
+          const numPages = pdf.numPages;
+          const pagesToRead = [...new Set([1, Math.min(13, numPages)])];
+          let text = "";
+          for (const pageNum of pagesToRead) {
+            const page = await pdf.getPage(pageNum);
+            const content = await page.getTextContent();
+            text += content.items.map(i => i.str).join(" ") + "\n\n";
+          }
+          resolve(text);
+        } catch(err) { reject(err); }
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+    messages = [{ role:"user", content:`Extract the sales order data from this document. Return ONLY a JSON object.\n\n${text}` }];
   } else {
     const csv = await parseSpreadsheet(file);
     messages = [{ role:"user", content:`Extract the sales order data from this spreadsheet CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }];
