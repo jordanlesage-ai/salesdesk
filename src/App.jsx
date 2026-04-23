@@ -5,18 +5,21 @@ import * as XLSX from "xlsx";
 let clerkInstance = null;
 async function getClerk() {
   if (clerkInstance) return clerkInstance;
+  const publishableKey = "pk_test_cG9zc2libGUtcGVhY29jay04LmNsZXJrLmFjY291bnRzLmRldiQ";
+  const frontendApiUrl = "https://possible-peacock-8.clerk.accounts.dev";
   await new Promise((resolve, reject) => {
     if (window.Clerk) return resolve();
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+    script.setAttribute("data-clerk-publishable-key", publishableKey);
+    script.src = `${frontendApiUrl}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
     script.onload = resolve;
     script.onerror = reject;
     document.head.appendChild(script);
   });
-  const clerk = new window.Clerk("pk_test_cG9zc2libGUtcGVhY29jay04LmNsZXJrLmFjY291bnRzLmRldiQ");
-  await clerk.load();
-  clerkInstance = clerk;
-  return clerk;
+  // Frontend API script pre-initializes window.Clerk as an instance, just call load()
+  await window.Clerk.load();
+  clerkInstance = window.Clerk;
+  return clerkInstance;
 }
 
 /* ─── Google Font ─── */
@@ -893,22 +896,29 @@ export default function SalesDesk() {
 
   // Init Clerk auth
   useEffect(() => {
-    getClerk().then(clerk => {
-      const update = async () => {
-        const u = clerk.user;
-        setUser(u || null);
-        if (u) {
-          try {
-            const t = await u.getIdToken();
-            setToken(t);
-          } catch {}
-        } else {
-          setToken(null);
-        }
-      };
-      update();
-      clerk.addListener(update);
-    });
+    const init = async () => {
+      try {
+        const clerk = await getClerk();
+        const update = async () => {
+          const u = clerk.user;
+          setUser(u || null);
+          if (u) {
+            try {
+              const t = await u.getIdToken();
+              setToken(t);
+            } catch {}
+          } else {
+            setToken(null);
+          }
+        };
+        update();
+        clerk.addListener(update);
+      } catch(err) {
+        console.error("Clerk init error:", err);
+        setUser(null); // show login screen on error
+      }
+    };
+    init();
   }, []);
 
   const authFetch = useCallback((url, opts = {}) => {
