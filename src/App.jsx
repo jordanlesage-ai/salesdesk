@@ -868,7 +868,7 @@ export default function App() {
   if (loading) return (
     <div style={{...S.app,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}>
       <div style={{textAlign:'center'}}>
-        <div style={{fontSize:32,marginBottom:8}}>ð¥©</div>
+        <div style={{fontSize:32,marginBottom:8,fontWeight:900,color:'#C41E1E'}}>ð¥©</div>
         <div style={{fontWeight:700,color:'#C41E1E',fontSize:18}}>Alimentation Première</div>
         <div style={{color:'#aaa',marginTop:8}}>{t('loading')}</div>
       </div>
