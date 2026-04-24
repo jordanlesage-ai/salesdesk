@@ -830,7 +830,7 @@ function useClerk() {
 export default function App() {
   const [lang, setLang] = useState('fr');
   const t = useT(lang);
-  const { me, setMe, loading, signOut } = useClerkAuth();
+  const { me, setMe, loading, signOut } = useClerk();
   const api = useAPI();
   const [view, setView] = useState('orders'); // orders|form|detail|dashboard|delivery|profile
   const [selectedOrder, setSelectedOrder] = useState(null);
