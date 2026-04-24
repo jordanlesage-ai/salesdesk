@@ -21,7 +21,7 @@ export const translations = {
     paymentMethod:'Mode de paiement',cashDoor:'Comptant à la porte',lendcare:'Financement Lendcare',
     deliveryDates:'Dates de livraison',addDeliveryDate:'Ajouter une date',
     deliveryDate:'Date de livraison',timeSlot:'Plage horaire',
-    morning:'Matin (9h–12h)',afternoon:'Après-midi (12h–16h)',evening:'Soir (16h–20h)',
+    afternoon:'12h–16h',evening:'17h–21h',
     slotsRemaining:'places restantes',slotFull:'Complet',
     signatures:'Signatures',repSignature:'Signature du représentant',clientSignature:'Signature du client',
     signHere:'Signer ici',clearSignature:'Effacer',saveSignature:'Enregistrer la signature',
