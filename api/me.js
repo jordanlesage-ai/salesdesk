@@ -1,7 +1,14 @@
 import { createClerkClient, verifyToken } from '@clerk/backend';
 
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
-const AUTHORIZED_PARTIES = ['salesdesk-five.vercel.app','localhost:5173','localhost:4173'];
+const AUTHORIZED_PARTIES = [
+  'https://salesdesk-five.vercel.app',
+  'salesdesk-five.vercel.app',
+  'http://localhost:5173',
+  'localhost:5173',
+  'http://localhost:4173',
+  'localhost:4173',
+];
 
 export async function verifyAuth(req) {
   const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
