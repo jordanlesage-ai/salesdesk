@@ -1,4 +1,4 @@
-import { createClerkClient } from '@clerk/backend';
+import { createClerkClient, verifyToken } from '@clerk/backend';
 
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 const AUTHORIZED_PARTIES = ['salesdesk-five.vercel.app','localhost:5173','localhost:4173'];
@@ -7,7 +7,10 @@ export async function verifyAuth(req) {
   const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
   const token = authHeader.replace(/^Bearer\s+/i, '');
   if (!token) throw Object.assign(new Error('No token'), { status: 401 });
-  const payload = await clerk.verifyToken(token, { authorizedParties: AUTHORIZED_PARTIES });
+  const payload = await verifyToken(token, {
+    secretKey: process.env.CLERK_SECRET_KEY,
+    authorizedParties: AUTHORIZED_PARTIES,
+  });
   const user = await clerk.users.getUser(payload.sub);
   return {
     userId: user.id,
