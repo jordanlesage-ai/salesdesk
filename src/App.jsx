@@ -906,10 +906,10 @@ export default function App() {
       <main style={S.main}>
         {!me && (
           <div style={{...S.card,textAlign:'center',padding:48}}>
-            <div style={{fontSize:48,marginBottom:12}}>ð¥©</div>
+            <div style={{fontSize:48,fontWeight:900,color:"#C41E1E",marginBottom:12}}>AP</div>
             <h2 style={{color:'#C41E1E',fontWeight:800}}>Alimentation Première</h2>
             <p style={{color:'#555',marginBottom:24}}>Plateforme de gestion des ventes</p>
-            <button style={{...S.btn(),fontSize:16,padding:'12px 32px'}} onClick={goSignIn}>{t('signIn')} -</button>
+            <button style={{...S.btn(),fontSize:16,padding:'12px 32px'}} onClick={goSignIn}>{t('signIn')} →</button>
           </div>
         )}
 
