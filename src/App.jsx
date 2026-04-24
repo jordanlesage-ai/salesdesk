@@ -785,16 +785,21 @@ function useClerk() {
 
   async function loadClerkAndGetToken() {
     if (!window.Clerk) {
-      // Load Clerk JS
       const script = document.createElement('script');
-      script.src = `https://possible-peacock-8.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
-      script.setAttribute('data-clerk-publishable-key', import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+      const pk = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || '';
+      // Derive frontend API from publishable key: pk_live_xxx -> xxx.clerk.accounts.dev
+      const domain = pk.replace(/^pk_(live|test)_/, '');
+      let frontendApi = '';
+      try { frontendApi = atob(domain); } catch(e) { frontendApi = 'clerk.accounts.dev'; }
+      script.src = `https://${frontendApi}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
+      script.setAttribute('data-clerk-publishable-key', pk);
       document.head.appendChild(script);
       script.onload = async () => { await initClerk(); };
       script.onerror = () => setLoading(false);
     } else {
       await initClerk();
     }
+  }
   }
 
   async function initClerk() {
