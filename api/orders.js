@@ -11,7 +11,7 @@ function orderId() {
 
 // Role checks
 const canReadAll = r => ['client_service','manager','delivery'].includes(r);
-const canWrite = r => ['rep','client_service'].includes(r);
+const canWrite = r => ['rep','client_service','manager'].includes(r);
 const isAdmin = r => r === 'manager';
 
 export default async function handler(req, res) {
@@ -26,7 +26,7 @@ export default async function handler(req, res) {
 
   const { id } = req.query;
 
-  // ── GET /api/orders ──────────────────────────────────────────────────────────
+  // ââ GET /api/orders ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   if (req.method === 'GET' && !id) {
     try {
       if (me.role === 'client') {
@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // ── GET /api/orders?id=xxx ──────────────────────────────────────────────────
+  // ââ GET /api/orders?id=xxx ââââââââââââââââââââââââââââââââââââââââââââââââââ
   if (req.method === 'GET' && id) {
     try {
       const order = await redis.get(`order:${id}`);
@@ -64,7 +64,7 @@ export default async function handler(req, res) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // ── POST /api/orders ─────────────────────────────────────────────────────────
+  // ââ POST /api/orders âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   if (req.method === 'POST') {
     if (!canWrite(me.role)) return res.status(403).json({ error: 'Forbidden' });
     try {
@@ -84,7 +84,7 @@ export default async function handler(req, res) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // ── PUT /api/orders?id=xxx ───────────────────────────────────────────────────
+  // ââ PUT /api/orders?id=xxx âââââââââââââââââââââââââââââââââââââââââââââââââââ
   if (req.method === 'PUT' && id) {
     try {
       const existing = await redis.get(`order:${id}`);
@@ -101,7 +101,7 @@ export default async function handler(req, res) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // ── PATCH /api/orders?id=xxx ─────────────────────────────────────────────────
+  // ââ PATCH /api/orders?id=xxx âââââââââââââââââââââââââââââââââââââââââââââââââ
   // Used for: status changes, signature updates, date change requests
   if (req.method === 'PATCH' && id) {
     try {
