@@ -3,22 +3,22 @@ import { useUser, useAuth, useClerk as useClerkHook, SignInButton } from '@clerk
 import { useT } from './i18n.js';
 import { PRODUCTS, CATEGORIES } from './products.js';
 
-// ââ Constants ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Constants ----------------------------------------------------------------
 const TPS = 0.05;
 const TVQ = 0.09975;
 const COMMISSION_RATE = 0.09;
 const APP_URL = window.location.origin;
 const API = (path) => `${APP_URL}/api/${path}`;
 
-// ââ Helpers ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Helpers ------------------------------------------------------------------
 function calcTotals(items) {
   const subtotal = items.reduce((s, i) => s + (i.price * (i.qty || 1)), 0);
   const tps = subtotal * TPS;
   const tvq = subtotal * TVQ;
   return { subtotal, tps, tvq, total: subtotal + tps + tvq };
 }
-function fmt$(n) { return n != null ? `${Number(n).toFixed(2)} $` : 'â'; }
-function fmtDate(d) { return d ? new Date(d).toLocaleDateString('fr-CA') : 'â'; }
+function fmt$(n) { return n != null ? `${Number(n).toFixed(2)} $` : '-'; }
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString('fr-CA') : '-'; }
 function statusColor(s) {
   return { draft:'#888', confirmed:'#2563eb', delivered:'#16a34a', cancelled:'#dc2626' }[s] || '#888';
 }
@@ -26,7 +26,7 @@ function statusLabel(s, t) {
   return { draft: t('statusDraft'), confirmed: t('statusConfirmed'), delivered: t('statusDelivered'), cancelled: t('statusCancelled') }[s] || s;
 }
 
-// ââ Styles âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Styles -------------------------------------------------------------------
 const S = {
   app: { fontFamily:"'DM Sans', sans-serif", background:'#f8f8f8', minHeight:'100vh', color:'#1a1a1a' },
   header: { background:'#C41E1E', color:'#fff', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:56, boxShadow:'0 2px 8px rgba(0,0,0,.18)', position:'sticky', top:0, zIndex:100 },
@@ -57,13 +57,13 @@ const S = {
   signCanvas: { border:'1.5px solid #e0e0e0', borderRadius:8, touchAction:'none', width:'100%', height:180, background:'#fff' },
 };
 
-// ââ Toast ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Toast --------------------------------------------------------------------
 function Toast({ msg, onClose }) {
   useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
   return <div style={S.toast}>{msg}</div>;
 }
 
-// ââ Signature Pad âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Signature Pad -------------------------------------------------------------
 function SignaturePad({ onSave, onClear, existingData, readOnly }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
@@ -123,7 +123,7 @@ function SignaturePad({ onSave, onClear, existingData, readOnly }) {
   );
 }
 
-// ââ useAPI ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- useAPI --------------------------------------------------------------------
 function useAPI() {
   const token = () => localStorage.getItem('ap_token') || '';
   const headers = () => ({ 'Authorization':`Bearer ${token()}`, 'Content-Type':'application/json' });
@@ -135,7 +135,7 @@ function useAPI() {
   };
 }
 
-// ââ ProductPicker âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- ProductPicker -------------------------------------------------------------
 function ProductPicker({ items, onChange, t }) {
   const [cat, setCat] = useState('');
   const [search, setSearch] = useState('');
@@ -201,7 +201,7 @@ function ProductPicker({ items, onChange, t }) {
                 <td style={S.td}>{fmt$(i.price)}</td>
                 <td style={S.td}><input type="number" min={1} value={i.qty} onChange={e=>setQty(i.code,parseInt(e.target.value)||1)} style={{...S.input,width:60}} /></td>
                 <td style={S.td} style={{fontWeight:700}}>{fmt$(i.price*i.qty)}</td>
-                <td style={S.td}><button style={S.btn('danger')} onClick={()=>remove(i.code)}>â</button></td>
+                <td style={S.td}><button style={S.btn('danger')} onClick={()=>remove(i.code)}>-</button></td>
               </tr>
             ))}
           </tbody>
@@ -211,7 +211,7 @@ function ProductPicker({ items, onChange, t }) {
   );
 }
 
-// ââ DeliveryDatePicker ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- DeliveryDatePicker --------------------------------------------------------
 function DeliveryDatePicker({ dates, onChange, t, api }) {
   const [slots, setSlots] = useState({});
 
@@ -240,13 +240,13 @@ function DeliveryDatePicker({ dates, onChange, t, api }) {
             <select style={S.select} value={d.slot} onChange={e=>update(i,'slot',e.target.value)}>
               {['morning','afternoon','evening'].map(s=>{
                 const info = slots[`${d.date}:${s}`];
-                const rem = info?.remaining ?? 'â';
+                const rem = info?.remaining ?? '-';
                 const full = info?.remaining === 0;
-                return <option key={s} value={s} disabled={full}>{slotLabel[s]} â {full ? t('slotFull') : `${rem} ${t('slotsRemaining')}`}</option>;
+                return <option key={s} value={s} disabled={full}>{slotLabel[s]} - {full ? t('slotFull') : `${rem} ${t('slotsRemaining')}`}</option>;
               })}
             </select>
           </div>
-          <button style={S.btn('danger')} onClick={()=>removeDate(i)}>â</button>
+          <button style={S.btn('danger')} onClick={()=>removeDate(i)}>-</button>
         </div>
       ))}
       {dates.length < 4 && <button style={S.btn('ghost')} onClick={addDate}>+ {t('addDeliveryDate')}</button>}
@@ -254,7 +254,7 @@ function DeliveryDatePicker({ dates, onChange, t, api }) {
   );
 }
 
-// ââ OrderForm âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- OrderForm -----------------------------------------------------------------
 function OrderForm({ t, api, me, onSaved, onCancel, existing }) {
   const blank = { client1:{name:'',phone:'',email:''}, client2:{name:'',phone:'',email:''}, address:'', city:'', postalCode:'', repName:`${me.firstName} ${me.lastName}`.trim(), repOfficePhone:'', repEmail:me.email, referredBy:'', items:[], deliveryDates:[], paymentMethod:'cash', notes:'' };
   const [form, setForm] = useState(existing ? { ...blank, ...existing } : blank);
@@ -295,7 +295,7 @@ function OrderForm({ t, api, me, onSaved, onCancel, existing }) {
       }
       if (order.error) { setError(order.error); return; }
 
-      // If both signed â send invite/confirmation email
+      // If both signed - send invite/confirmation email
       if (repSig && (clientSig || clientSigMode === 'docusign') && order.id) {
         const firstDate = form.deliveryDates[0];
         await api.post('invite', {
@@ -412,12 +412,12 @@ function OrderForm({ t, api, me, onSaved, onCancel, existing }) {
               ))}
             </div>
             {clientSigMode==='inperson' && <SignaturePad onSave={setClientSig} onClear={()=>setClientSig(null)} existingData={clientSig} />}
-            {clientSigMode==='remote' && <div style={{color:'#555',fontSize:13,padding:'12px 0'}}>{t('sendSignatureEmail')} â {t('signatureLinkSent')}</div>}
+            {clientSigMode==='remote' && <div style={{color:'#555',fontSize:13,padding:'12px 0'}}>{t('sendSignatureEmail')} - {t('signatureLinkSent')}</div>}
             {clientSigMode==='docusign' && <div style={{...S.badge('#2563eb'),fontSize:13,padding:'8px 14px'}}>{t('docuSignSent')}</div>}
           </div>
         </div>
         <div style={{marginTop:10,fontSize:13,color: repSig && (clientSig||clientSigMode==='docusign') ? '#16a34a':'#888'}}>
-          {repSig && (clientSig||clientSigMode==='docusign') ? 'â '+t('bothSigned') : t('awaitingClientSign')}
+          {repSig && (clientSig||clientSigMode==='docusign') ? '- '+t('bothSigned') : t('awaitingClientSign')}
         </div>
       </div>
 
@@ -431,7 +431,7 @@ function OrderForm({ t, api, me, onSaved, onCancel, existing }) {
   );
 }
 
-// ââ OrderDetail âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- OrderDetail ---------------------------------------------------------------
 function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
   const [loading, setLoading] = useState(false);
   const [cancelModal, setCancelModal] = useState(false);
@@ -451,7 +451,7 @@ function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
 
   return (
     <div>
-      <button style={{...S.btn('ghost'),marginBottom:16}} onClick={onBack}>â {t('back')}</button>
+      <button style={{...S.btn('ghost'),marginBottom:16}} onClick={onBack}>- {t('back')}</button>
       <div style={S.card}>
         <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8,marginBottom:16}}>
           <div>
@@ -488,7 +488,7 @@ function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
         {order.deliveryDates?.length > 0 && (
           <div style={{marginTop:16}}>
             <div style={S.sectionTitle}>{t('deliveryDates')}</div>
-            {order.deliveryDates.map((d,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px solid #f0f0f0'}}>{d.date} â {t(d.slot)}</div>)}
+            {order.deliveryDates.map((d,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px solid #f0f0f0'}}>{d.date} - {t(d.slot)}</div>)}
           </div>
         )}
 
@@ -549,7 +549,7 @@ function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
   );
 }
 
-// ââ OrdersList ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- OrdersList ----------------------------------------------------------------
 function OrdersList({ t, api, me, onSelectOrder, onNewOrder }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -601,7 +601,7 @@ function OrdersList({ t, api, me, onSelectOrder, onNewOrder }) {
   );
 }
 
-// ââ Dashboard âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Dashboard -----------------------------------------------------------------
 function Dashboard({ t, api, me }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -677,7 +677,7 @@ function Dashboard({ t, api, me }) {
   );
 }
 
-// ââ DeliveryView ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- DeliveryView --------------------------------------------------------------
 function DeliveryView({ t, api, onSelectOrder }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -728,7 +728,7 @@ function DeliveryView({ t, api, onSelectOrder }) {
   );
 }
 
-// ââ Profile âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Profile -------------------------------------------------------------------
 function Profile({ t, api, me, onUpdated }) {
   const [sig, setSig] = useState(me.savedSignature);
   const [saving, setSaving] = useState(false);
@@ -738,7 +738,7 @@ function Profile({ t, api, me, onUpdated }) {
     setSaving(true);
     await api.post('signature', { signatureData: data });
     setSig(data); setSaving(false);
-    setToast(t('savedSignature')+' â');
+    setToast(t('savedSignature')+' -');
     onUpdated({ ...me, savedSignature: data });
   }
 
@@ -763,7 +763,7 @@ function Profile({ t, api, me, onUpdated }) {
   );
 }
 
-// ââ Auth / Clerk integration ââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Auth / Clerk integration --------------------------------------------------
 // We use Clerk's hosted sign-in page and capture the token from the URL/__clerk_db_jwt
 function useClerk() {
   const [me, setMe] = useState(null);
@@ -775,7 +775,7 @@ function useClerk() {
     const params = new URLSearchParams(window.location.search);
     const ticket = params.get('__clerk_ticket');
     if (ticket) {
-      // Exchange ticket for session â redirect to Clerk hosted
+      // Exchange ticket for session - redirect to Clerk hosted
       window.location.href = `https://possible-peacock-8.accounts.dev/sign-in?__clerk_ticket=${ticket}&redirect_url=${encodeURIComponent(APP_URL)}`;
       return;
     }
@@ -826,7 +826,7 @@ function useClerk() {
   return { me, setMe, loading, signOut };
 }
 
-// ââ App âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- App -----------------------------------------------------------------------
 export default function App() {
   const [lang, setLang] = useState('fr');
   const t = useT(lang);
@@ -846,7 +846,7 @@ export default function App() {
   function selectOrder(order) { setSelectedOrder(order); setView('detail'); }
 
   function handleOrderSaved(order) {
-    setToast(t('save') + ' â');
+    setToast(t('save') + ' -');
     setView('orders');
   }
 
@@ -909,7 +909,7 @@ export default function App() {
             <div style={{fontSize:48,marginBottom:12}}>ð¥©</div>
             <h2 style={{color:'#C41E1E',fontWeight:800}}>Alimentation Première</h2>
             <p style={{color:'#555',marginBottom:24}}>Plateforme de gestion des ventes</p>
-            <button style={{...S.btn(),fontSize:16,padding:'12px 32px'}} onClick={goSignIn}>{t('signIn')} â</button>
+            <button style={{...S.btn(),fontSize:16,padding:'12px 32px'}} onClick={goSignIn}>{t('signIn')} -</button>
           </div>
         )}
 
@@ -930,7 +930,7 @@ export default function App() {
             onBack={()=>setView('orders')}
             onUpdated={(updated)=>{
               setSelectedOrder(updated);
-              setToast('Mis Ã  jour â');
+              setToast('Mis Ã  jour -');
             }} />
         )}
 
