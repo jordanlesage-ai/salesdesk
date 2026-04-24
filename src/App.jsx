@@ -869,7 +869,7 @@ export default function App() {
     <div style={{...S.app,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}>
       <div style={{textAlign:'center'}}>
         <div style={{fontSize:32,marginBottom:8}}>ð¥©</div>
-        <div style={{fontWeight:700,color:'#C41E1E',fontSize:18}}>Alimentation PremiÃ¨re</div>
+        <div style={{fontWeight:700,color:'#C41E1E',fontSize:18}}>Alimentation Première</div>
         <div style={{color:'#aaa',marginTop:8}}>{t('loading')}</div>
       </div>
     </div>
@@ -881,7 +881,7 @@ export default function App() {
 
       {/* Header */}
       <header style={S.header}>
-        <div style={S.logo}>ð¥© Alimentation PremiÃ¨re</div>
+        <div style={S.logo}>ð¥© Alimentation Première</div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
           {me && navItems().map(n=>(
             <button key={n.key} style={S.navBtn(view===n.key)} onClick={()=>{setView(n.key);setSelectedOrder(null);}}>
@@ -902,7 +902,7 @@ export default function App() {
         {!me && (
           <div style={{...S.card,textAlign:'center',padding:48}}>
             <div style={{fontSize:48,marginBottom:12}}>ð¥©</div>
-            <h2 style={{color:'#C41E1E',fontWeight:800}}>Alimentation PremiÃ¨re</h2>
+            <h2 style={{color:'#C41E1E',fontWeight:800}}>Alimentation Première</h2>
             <p style={{color:'#555',marginBottom:24}}>Plateforme de gestion des ventes</p>
             <button style={{...S.btn(),fontSize:16,padding:'12px 32px'}} onClick={goSignIn}>{t('signIn')} â</button>
           </div>
