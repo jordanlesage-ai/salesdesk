@@ -225,7 +225,7 @@ function DeliveryDatePicker({ dates, onChange, t, api }) {
   function removeDate(i) { onChange(dates.filter((_,idx)=>idx!==i)); }
   function update(i, field, val) { onChange(dates.map((d,idx)=>idx===i?{...d,[field]:val}:d)); }
 
-  const slotLabel = { morning:t('morning'), afternoon:t('afternoon'), evening:t('evening') };
+  const slotLabel = { afternoon:t('afternoon'), evening:t('evening') };
 
   return (
     <div>
@@ -238,7 +238,7 @@ function DeliveryDatePicker({ dates, onChange, t, api }) {
           <div style={S.col()}>
             <label style={S.label}>{t('timeSlot')}</label>
             <select style={S.select} value={d.slot} onChange={e=>update(i,'slot',e.target.value)}>
-              {['morning','afternoon','evening'].map(s=>{
+              {['afternoon','evening'].map(s=>{
                 const info = slots[`${d.date}:${s}`];
                 const rem = info?.remaining ?? '-';
                 const full = info?.remaining === 0;
@@ -886,7 +886,7 @@ export default function App() {
 
       {/* Header */}
       <header style={S.header}>
-        <div style={S.logo}>ð¥© Alimentation Première</div>
+        <div style={S.logo}><span style={{background:"#fff",color:"#C41E1E",borderRadius:6,padding:"2px 8px",fontWeight:900,fontSize:14,marginRight:8}}>AP</span>Alimentation Première</div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
           {me && navItems().map(n=>(
             <button key={n.key} style={S.navBtn(view===n.key)} onClick={()=>{setView(n.key);setSelectedOrder(null);}}>
