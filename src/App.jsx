@@ -1,1055 +1,940 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from "react";
-import * as XLSX from "xlsx";
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useT } from './i18n.js';
+import { PRODUCTS, CATEGORIES } from './products.js';
 
-/* ─── Load Clerk ─── */
-let clerkInstance = null;
-async function getClerk() {
-  if (clerkInstance) return clerkInstance;
-  const publishableKey = "pk_test_cG9zc2libGUtcGVhY29jay04LmNsZXJrLmFjY291bnRzLmRldiQ";
-  const frontendApiUrl = "https://possible-peacock-8.clerk.accounts.dev";
-  await new Promise((resolve, reject) => {
-    if (window.Clerk) return resolve();
-    const script = document.createElement("script");
-    script.setAttribute("data-clerk-publishable-key", publishableKey);
-    script.src = `${frontendApiUrl}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
-    script.onload = resolve;
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-  // Frontend API script pre-initializes window.Clerk as an instance, just call load()
-  await window.Clerk.load();
-  clerkInstance = window.Clerk;
-  return clerkInstance;
+// ── Constants ────────────────────────────────────────────────────────────────
+const TPS = 0.05;
+const TVQ = 0.09975;
+const COMMISSION_RATE = 0.09;
+const APP_URL = window.location.origin;
+const API = (path) => `${APP_URL}/api/${path}`;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function calcTotals(items) {
+  const subtotal = items.reduce((s, i) => s + (i.price * (i.qty || 1)), 0);
+  const tps = subtotal * TPS;
+  const tvq = subtotal * TVQ;
+  return { subtotal, tps, tvq, total: subtotal + tps + tvq };
+}
+function fmt$(n) { return n != null ? `${Number(n).toFixed(2)} $` : '–'; }
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString('fr-CA') : '–'; }
+function statusColor(s) {
+  return { draft:'#888', confirmed:'#2563eb', delivered:'#16a34a', cancelled:'#dc2626' }[s] || '#888';
+}
+function statusLabel(s, t) {
+  return { draft: t('statusDraft'), confirmed: t('statusConfirmed'), delivered: t('statusDelivered'), cancelled: t('statusCancelled') }[s] || s;
 }
 
-/* ─── Google Font ─── */
-const fontLink = document.createElement("link");
-fontLink.rel = "stylesheet";
-fontLink.href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap";
-document.head.appendChild(fontLink);
-
-/* ─── Design Tokens ─── */
-const T = {
-  bg: "#0f1117",
-  card: "#181c27",
-  border: "#252a38",
-  gold: "#f0b429",
-  goldDim: "#b37f00",
-  text: "#e8eaf0",
-  muted: "#7a8099",
-  overdue: "#e05252",
-  today: "#f0b429",
-  upcoming: "#3ecf8e",
-  noDate: "#7a8099",
-  font: "'DM Sans', sans-serif",
+// ── Styles ───────────────────────────────────────────────────────────────────
+const S = {
+  app: { fontFamily:"'DM Sans', sans-serif", background:'#f8f8f8', minHeight:'100vh', color:'#1a1a1a' },
+  header: { background:'#C41E1E', color:'#fff', padding:'0 20px', display:'flex', alignItems:'center', justifyContent:'space-between', height:56, boxShadow:'0 2px 8px rgba(0,0,0,.18)', position:'sticky', top:0, zIndex:100 },
+  logo: { fontWeight:800, fontSize:18, letterSpacing:'-0.5px', display:'flex', alignItems:'center', gap:8 },
+  main: { maxWidth:900, margin:'0 auto', padding:'24px 16px', },
+  card: { background:'#fff', borderRadius:10, boxShadow:'0 1px 4px rgba(0,0,0,.09)', padding:24, marginBottom:20 },
+  btn: (variant='primary') => ({
+    padding:'9px 20px', borderRadius:7, border:'none', cursor:'pointer', fontWeight:600, fontSize:14, fontFamily:"'DM Sans',sans-serif",
+    background: variant==='primary'?'#C41E1E': variant==='ghost'?'transparent': variant==='danger'?'#dc2626':'#f0f0f0',
+    color: variant==='primary'||variant==='danger'?'#fff': '#333',
+    border: variant==='ghost'?'1.5px solid #ddd':'none',
+    transition:'opacity .15s', opacity:1,
+  }),
+  input: { width:'100%', padding:'9px 12px', borderRadius:7, border:'1.5px solid #e0e0e0', fontSize:14, fontFamily:"'DM Sans',sans-serif", background:'#fafafa', boxSizing:'border-box', outline:'none' },
+  select: { width:'100%', padding:'9px 12px', borderRadius:7, border:'1.5px solid #e0e0e0', fontSize:14, fontFamily:"'DM Sans',sans-serif", background:'#fafafa', boxSizing:'border-box' },
+  label: { fontSize:13, fontWeight:600, color:'#555', marginBottom:4, display:'block' },
+  row: { display:'flex', gap:16, flexWrap:'wrap' },
+  col: (flex=1) => ({ flex, minWidth:160 }),
+  badge: (color) => ({ background:color+'22', color, borderRadius:99, padding:'2px 10px', fontSize:12, fontWeight:700, display:'inline-block' }),
+  sectionTitle: { fontSize:17, fontWeight:800, marginBottom:14, color:'#C41E1E', letterSpacing:'-0.3px' },
+  table: { width:'100%', borderCollapse:'collapse', fontSize:14 },
+  th: { textAlign:'left', padding:'8px 10px', borderBottom:'2px solid #eee', fontWeight:700, color:'#555', fontSize:13 },
+  td: { padding:'9px 10px', borderBottom:'1px solid #f0f0f0' },
+  toast: { position:'fixed', bottom:24, right:24, background:'#222', color:'#fff', borderRadius:8, padding:'12px 20px', fontSize:14, fontWeight:600, zIndex:999, boxShadow:'0 4px 20px rgba(0,0,0,.3)', maxWidth:320 },
+  modal: { position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:500, display:'flex', alignItems:'center', justifyContent:'center', padding:16 },
+  modalBox: { background:'#fff', borderRadius:12, padding:28, maxWidth:480, width:'100%', boxShadow:'0 8px 40px rgba(0,0,0,.2)' },
+  navBtn: (active) => ({ padding:'6px 14px', borderRadius:6, border:'none', cursor:'pointer', fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight: active?700:500, background: active?'rgba(255,255,255,.2)':'transparent', color:'#fff' }),
+  signCanvas: { border:'1.5px solid #e0e0e0', borderRadius:8, touchAction:'none', width:'100%', height:180, background:'#fff' },
 };
 
-/* ─── Helpers ─── */
-const FR_MONTHS = { janvier:1,février:2,fevrier:2,mars:3,avril:4,mai:5,juin:6,juillet:7,août:8,aout:8,septembre:9,octobre:10,novembre:11,décembre:12,decembre:12 };
-const EN_MONTHS = { january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12 };
+// ── Toast ────────────────────────────────────────────────────────────────────
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
+  return <div style={S.toast}>{msg}</div>;
+}
 
-function sanitizeDate(raw) {
-  if (!raw) return null;
-  const s = String(raw).trim();
+// ── Signature Pad ─────────────────────────────────────────────────────────────
+function SignaturePad({ onSave, onClear, existingData, readOnly }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const [hasDrawn, setHasDrawn] = useState(false);
 
-  // Already ISO YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  useEffect(() => {
+    if (existingData && canvasRef.current) {
+      const img = new Image();
+      img.onload = () => { const ctx = canvasRef.current?.getContext('2d'); if (ctx) { ctx.clearRect(0,0,canvasRef.current.width,canvasRef.current.height); ctx.drawImage(img,0,0); } };
+      img.src = existingData;
+      setHasDrawn(true);
+    }
+  }, [existingData]);
 
-  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-  const dmy = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
-  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
-
-  // DD/MM or DD-MM (no year — assume current year)
-  const dm = s.match(/^(\d{1,2})[-/.](\d{1,2})$/);
-  if (dm) return `${new Date().getFullYear()}-${dm[2].padStart(2,"0")}-${dm[1].padStart(2,"0")}`;
-
-  // "30 avril2026" or "30avril2026" or "30 avril 2026" — day + month word + year (spaces optional)
-  const long = s.match(/^(\d{1,2})\s*([a-zA-ZÀ-ÿ]+)\s*(\d{4})$/i);
-  if (long) {
-    const mon = FR_MONTHS[long[2].toLowerCase()] || EN_MONTHS[long[2].toLowerCase()];
-    if (mon) return `${long[3]}-${String(mon).padStart(2,"0")}-${long[1].padStart(2,"0")}`;
+  function getPos(e, canvas) {
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / r.width, scaleY = canvas.height / r.height;
+    const src = e.touches ? e.touches[0] : e;
+    return { x:(src.clientX - r.left)*scaleX, y:(src.clientY - r.top)*scaleY };
   }
 
-  return null;
-}
-
-function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-}
-
-function fmtDate(iso) {
-  if (!iso) return "—";
-  const [y,m,d] = iso.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-const COMMISSION_RATE = 0.09;
-function commission(n) { return Number(n) * COMMISSION_RATE; }
-
-function fmtMoney(n) {
-  if (n == null || isNaN(n)) return "$0.00";
-  return "$" + Number(n).toLocaleString("en-CA", { minimumFractionDigits:2, maximumFractionDigits:2 });
-}
-
-function getWeekKey(iso) {
-  if (!iso) return null;
-  const d = new Date(iso + "T12:00:00");
-  const thu = new Date(d); thu.setDate(d.getDate() - (d.getDay()+6)%7 + 3);
-  const y = thu.getFullYear();
-  const jan4 = new Date(y, 0, 4);
-  const w = 1 + Math.round(((thu - jan4) / 86400000 - 3 + (jan4.getDay()+6)%7) / 7);
-  return `${y}-W${String(w).padStart(2,"0")}`;
-}
-
-function getMonthKey(iso) { return iso ? iso.slice(0,7) : null; }
-function getYearKey(iso)  { return iso ? iso.slice(0,4) : null; }
-
-function deliveryStatus(deliveryDateIso) {
-  if (!deliveryDateIso) return "no-date";
-  const today = todayStr();
-  if (deliveryDateIso < today) return "delivered";
-  if (deliveryDateIso === today) return "today";
-  return "upcoming";
-}
-
-function statusColor(s) {
-  return { delivered: "#7a8099", today: T.today, upcoming: T.upcoming, "no-date": T.noDate }[s] || T.noDate;
-}
-function statusLabel(s) {
-  return { delivered:"Delivered", today:"Today", upcoming:"Upcoming", "no-date":"No Date" }[s] || "No Date";
-}
-
-/* ─── Excel serial → DD-MM-YYYY ─── */
-function excelSerialToDate(serial) {
-  const d = XLSX.SSF.parse_date_code(serial);
-  if (!d) return String(serial);
-  return `${String(d.d).padStart(2,"0")}-${String(d.m).padStart(2,"0")}-${d.y}`;
-}
-
-function isDateSerial(val, cell) {
-  return cell && cell.t === "n" && cell.z && /[ymd\/\-]/i.test(cell.z) && typeof val === "number";
-}
-
-/* ─── Parse spreadsheet ─── */
-function parseSpreadsheet(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      try {
-        const wb = XLSX.read(e.target.result, { type:"array", cellDates:false, cellNF:true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-        const rows = [];
-        for (let r = range.s.r; r <= range.e.r; r++) {
-          const row = [];
-          for (let c = range.s.c; c <= range.e.c; c++) {
-            const addr = XLSX.utils.encode_cell({r,c});
-            const cell = ws[addr];
-            if (!cell) { row.push(""); continue; }
-            if (isDateSerial(cell.v, cell)) {
-              row.push(excelSerialToDate(cell.v));
-            } else {
-              row.push(cell.v != null ? String(cell.v) : "");
-            }
-          }
-          rows.push(row);
-        }
-        const csv = rows.map(r => r.map(v => `"${v.replace(/"/g,'""')}"`).join(",")).join("\n");
-        resolve(csv);
-      } catch(err) { reject(err); }
-    };
-    reader.onerror = reject;
-    reader.readAsArrayBuffer(file);
-  });
-}
-
-function readBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result.split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-/* ─── AI Extraction ─── */
-async function extractFromFile(file) {
-  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-  let messages;
-
-  const sysPrompt = `You are a sales document parser for Alimentation Première. The document text is split into labeled pages (=== PAGE 1 ===, === PAGE 13 ===, etc).
-
-Extract order data and return ONLY a JSON object with these exact keys:
-- client (string — client name from PAGE 1)
-- date (string, format DD/MM/YYYY — order date from PAGE 1)
-- deliveryDate (string in DD/MM/YYYY format, or null — first delivery date from PAGE 13, may be in French like "21 avril 2026")
-- total (number — from PAGE 13 only: find the single line "Total du concept alimentaire" and extract that one number. It appears ONCE. Do NOT add it to anything else. Do NOT use delivery amounts or weekly payments.)
-- items (array of strings — product names ordered)
-Return ONLY the JSON object, no markdown, no explanation.`;
-
-  if (isPdf) {
-    const text = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-          await new Promise(r => { script.onload = r; document.head.appendChild(script); });
-          const pdfjsLib = window.pdfjsLib;
-          pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-          const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(e.target.result) }).promise;
-          const numPages = pdf.numPages;
-          const lastPage = Math.min(numPages, 14);
-          const pagesToRead = [...new Set([1, lastPage])];
-          let text = "";
-          for (const pageNum of pagesToRead) {
-            const page = await pdf.getPage(pageNum);
-            const content = await page.getTextContent();
-            text += `=== PAGE ${pageNum} ===\n` + content.items.map(i => i.str).join(" ") + "\n\n";
-          }
-          resolve(text);
-        } catch(err) { reject(err); }
-      };
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(file);
-    });
-    messages = [{ role:"user", content:`Extract the sales order data from this document. Return ONLY a JSON object.\n\n${text}` }];
-  } else {
-    const csv = await parseSpreadsheet(file);
-    messages = [{ role:"user", content:`Extract the sales order data from this spreadsheet CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }];
+  function onDown(e) {
+    if (readOnly) return;
+    e.preventDefault();
+    const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    drawing.current = true;
+    const p = getPos(e, canvas);
+    ctx.beginPath(); ctx.moveTo(p.x, p.y);
   }
-
-  const resp = await fetch("/api/extract", {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1024, system:sysPrompt, messages })
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `API error ${resp.status}`);
+  function onMove(e) {
+    if (!drawing.current || readOnly) return;
+    e.preventDefault();
+    const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.lineWidth=2.5; ctx.lineCap='round'; ctx.strokeStyle='#1a1a1a';
+    const p = getPos(e, canvas);
+    ctx.lineTo(p.x, p.y); ctx.stroke();
+    setHasDrawn(true);
   }
-  const data = await resp.json();
-  if (!data.content?.[0]?.text) throw new Error("Empty response from AI");
-  const text = data.content[0].text.replace(/```json|```/g,"").trim();
-  const parsed = JSON.parse(text);
+  function onUp() { drawing.current = false; }
+  function clear() { const ctx=canvasRef.current?.getContext('2d'); if(ctx&&canvasRef.current){ctx.clearRect(0,0,canvasRef.current.width,canvasRef.current.height);} setHasDrawn(false); onClear?.(); }
+  function save() { if (canvasRef.current) onSave?.(canvasRef.current.toDataURL()); }
+
+  return (
+    <div>
+      <canvas ref={canvasRef} width={560} height={180} style={S.signCanvas}
+        onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+        onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp} />
+      {!readOnly && (
+        <div style={{display:'flex',gap:8,marginTop:8}}>
+          <button style={S.btn('ghost')} onClick={clear}>Effacer</button>
+          {hasDrawn && <button style={S.btn()} onClick={save}>Enregistrer</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── useAPI ────────────────────────────────────────────────────────────────────
+function useAPI() {
+  const token = () => localStorage.getItem('ap_token') || '';
+  const headers = () => ({ 'Authorization':`Bearer ${token()}`, 'Content-Type':'application/json' });
   return {
-    client: parsed.client || "Unknown",
-    date: sanitizeDate(parsed.date) || todayStr(),
-    deliveryDate: (() => { try { return sanitizeDate(parsed.deliveryDate) || null; } catch(_) { return null; } })(),
-    total: Number(String(parsed.total).replace(/,/g, "").replace(/\s*\$/, "").trim()) || 0,
-    items: Array.isArray(parsed.items) ? parsed.items : [],
+    get: (path) => fetch(API(path), { headers: headers() }).then(r => r.json()),
+    post: (path, body) => fetch(API(path), { method:'POST', headers: headers(), body: JSON.stringify(body) }).then(r => r.json()),
+    put: (path, body) => fetch(API(path), { method:'PUT', headers: headers(), body: JSON.stringify(body) }).then(r => r.json()),
+    patch: (path, body) => fetch(API(path), { method:'PATCH', headers: headers(), body: JSON.stringify(body) }).then(r => r.json()),
   };
 }
 
-/* ─── Reusable Atoms ─── */
-function Card({ children, style }) {
-  return <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:12, padding:20, ...style }}>{children}</div>;
-}
+// ── ProductPicker ─────────────────────────────────────────────────────────────
+function ProductPicker({ items, onChange, t }) {
+  const [cat, setCat] = useState('');
+  const [search, setSearch] = useState('');
+  const [showing, setShowing] = useState(false);
 
-function Badge({ label, color, bg }) {
-  return <span style={{ display:"inline-block", padding:"2px 8px", borderRadius:20, fontSize:11, fontWeight:600, color: color||T.bg, background: bg||T.gold, marginRight:4, marginBottom:2, whiteSpace:"nowrap" }}>{label}</span>;
-}
+  const filtered = PRODUCTS.filter(p =>
+    (!cat || p.category === cat) &&
+    (!search || p.name.toLowerCase().includes(search.toLowerCase()))
+  );
 
-function Empty({ msg }) {
-  return <div style={{ textAlign:"center", color:T.muted, padding:"60px 0", fontSize:14 }}>
-    <div style={{ fontSize:32, marginBottom:8 }}>📂</div>
-    {msg}
-  </div>;
-}
+  function addProduct(p) {
+    const exists = items.find(i => i.code === p.code);
+    if (exists) onChange(items.map(i => i.code === p.code ? {...i, qty: i.qty+1} : i));
+    else onChange([...items, { ...p, qty: 1 }]);
+    setShowing(false); setSearch('');
+  }
+  function remove(code) { onChange(items.filter(i => i.code !== code)); }
+  function setQty(code, qty) { if(qty<1)return; onChange(items.map(i=>i.code===code?{...i,qty}:i)); }
 
-function GrandTotal({ label, amount, commissionAmount, style }) {
-  const comm = commissionAmount !== undefined ? commissionAmount : commission(amount);
-  return <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"14px 20px", background:`${T.gold}15`, border:`1px solid ${T.gold}40`, borderRadius:10, marginTop:16, ...style }}>
-    <span style={{ fontWeight:600, color:T.text, fontSize:14 }}>{label}</span>
-    <div style={{ textAlign:"right" }}>
-      <div style={{ fontWeight:700, color:T.gold, fontSize:16 }}>{fmtMoney(amount)}</div>
-      <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>comm. {fmtMoney(comm)}</div>
+  return (
+    <div>
+      <button style={{...S.btn('ghost'),marginBottom:12}} onClick={()=>setShowing(!showing)}>+ {t('addProduct')}</button>
+      {showing && (
+        <div style={{border:'1.5px solid #eee',borderRadius:8,padding:12,marginBottom:12,background:'#fafafa'}}>
+          <div style={S.row}>
+            <select style={{...S.select,flex:1}} value={cat} onChange={e=>setCat(e.target.value)}>
+              <option value="">{t('all')} ({t('category')})</option>
+              {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+            <input style={{...S.input,flex:2}} placeholder={t('search')} value={search} onChange={e=>setSearch(e.target.value)} />
+          </div>
+          <div style={{maxHeight:260,overflowY:'auto',marginTop:8}}>
+            {filtered.slice(0,80).map(p=>(
+              <div key={p.code} onClick={()=>addProduct(p)} style={{padding:'8px 10px',borderBottom:'1px solid #eee',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',borderRadius:6,transition:'background .1s'}}
+                onMouseOver={e=>e.currentTarget.style.background='#fff3f3'}
+                onMouseOut={e=>e.currentTarget.style.background='transparent'}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:13}}>{p.name}</div>
+                  <div style={{fontSize:11,color:'#888'}}>{p.format} · {p.origin} · #{p.code}</div>
+                </div>
+                <div style={{fontWeight:700,color:'#C41E1E',whiteSpace:'nowrap'}}>{fmt$(p.price)}</div>
+              </div>
+            ))}
+            {filtered.length === 0 && <div style={{color:'#aaa',padding:12}}>{t('noResults')}</div>}
+          </div>
+        </div>
+      )}
+      {items.length > 0 && (
+        <table style={S.table}>
+          <thead><tr>
+            <th style={S.th}>{t('products')}</th>
+            <th style={S.th}>{t('format')}</th>
+            <th style={S.th}>{t('unitPrice')}</th>
+            <th style={S.th}>{t('quantity')}</th>
+            <th style={S.th}>{t('lineTotal')}</th>
+            <th style={S.th}></th>
+          </tr></thead>
+          <tbody>
+            {items.map(i=>(
+              <tr key={i.code}>
+                <td style={S.td}><div style={{fontWeight:600}}>{i.name}</div><div style={{fontSize:11,color:'#999'}}>#{i.code}</div></td>
+                <td style={S.td}>{i.format}</td>
+                <td style={S.td}>{fmt$(i.price)}</td>
+                <td style={S.td}><input type="number" min={1} value={i.qty} onChange={e=>setQty(i.code,parseInt(e.target.value)||1)} style={{...S.input,width:60}} /></td>
+                <td style={S.td} style={{fontWeight:700}}>{fmt$(i.price*i.qty)}</td>
+                <td style={S.td}><button style={S.btn('danger')} onClick={()=>remove(i.code)}>✕</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
-  </div>;
+  );
 }
 
-function SidePanel({ title, onClose, children }) {
-  return <div style={{ position:"fixed", top:0, right:0, width:420, height:"100%", background:T.card, borderLeft:`1px solid ${T.border}`, zIndex:1000, overflowY:"auto", boxShadow:"-8px 0 32px #00000060" }}>
-    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"20px 24px 16px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:T.card, zIndex:1 }}>
-      <span style={{ fontWeight:700, fontSize:16, color:T.text }}>{title}</span>
-      <button onClick={onClose} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, fontSize:18, cursor:"pointer", padding:"2px 10px" }}>✕</button>
+// ── DeliveryDatePicker ────────────────────────────────────────────────────────
+function DeliveryDatePicker({ dates, onChange, t, api }) {
+  const [slots, setSlots] = useState({});
+
+  useEffect(() => {
+    const ds = dates.map(d=>d.date).filter(Boolean);
+    if (!ds.length) return;
+    api.get(`delivery?dates=${ds.join(',')}`).then(r=>{ if(!r.error) setSlots(r); }).catch(()=>{});
+  }, [JSON.stringify(dates)]);
+
+  function addDate() { onChange([...dates, { date:'', slot:'morning' }]); }
+  function removeDate(i) { onChange(dates.filter((_,idx)=>idx!==i)); }
+  function update(i, field, val) { onChange(dates.map((d,idx)=>idx===i?{...d,[field]:val}:d)); }
+
+  const slotLabel = { morning:t('morning'), afternoon:t('afternoon'), evening:t('evening') };
+
+  return (
+    <div>
+      {dates.map((d,i)=>(
+        <div key={i} style={{...S.card,padding:14,marginBottom:10,display:'flex',gap:12,alignItems:'flex-end',flexWrap:'wrap'}}>
+          <div style={S.col()}>
+            <label style={S.label}>{t('deliveryDate')} {i+1}</label>
+            <input type="date" style={S.input} value={d.date} onChange={e=>update(i,'date',e.target.value)} min={new Date().toISOString().slice(0,10)} />
+          </div>
+          <div style={S.col()}>
+            <label style={S.label}>{t('timeSlot')}</label>
+            <select style={S.select} value={d.slot} onChange={e=>update(i,'slot',e.target.value)}>
+              {['morning','afternoon','evening'].map(s=>{
+                const info = slots[`${d.date}:${s}`];
+                const rem = info?.remaining ?? '–';
+                const full = info?.remaining === 0;
+                return <option key={s} value={s} disabled={full}>{slotLabel[s]} — {full ? t('slotFull') : `${rem} ${t('slotsRemaining')}`}</option>;
+              })}
+            </select>
+          </div>
+          <button style={S.btn('danger')} onClick={()=>removeDate(i)}>✕</button>
+        </div>
+      ))}
+      {dates.length < 4 && <button style={S.btn('ghost')} onClick={addDate}>+ {t('addDeliveryDate')}</button>}
     </div>
-    <div style={{ padding:24 }}>{children}</div>
-  </div>;
+  );
 }
 
-function PeriodRow({ label, revenue, commissionAmount, count, pct, onClick, isSelected }) {
-  const comm = commissionAmount !== undefined ? commissionAmount : commission(revenue);
-  return <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:16, padding:"14px 16px", borderRadius:10, cursor:"pointer", marginBottom:6, background: isSelected ? `${T.gold}18` : "transparent", border:`1px solid ${isSelected ? T.gold+"40" : T.border}`, transition:"all .15s" }}>
-    <div style={{ flex:1, minWidth:0 }}>
-      <div style={{ fontWeight:600, fontSize:14, color:T.text }}>{label}</div>
-      <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>{count} order{count!==1?"s":""}</div>
-      <div style={{ marginTop:6, height:3, borderRadius:2, background:T.border }}>
-        <div style={{ width:`${pct}%`, height:3, borderRadius:2, background:T.gold, transition:"width .4s ease" }}/>
+// ── OrderForm ─────────────────────────────────────────────────────────────────
+function OrderForm({ t, api, me, onSaved, onCancel, existing }) {
+  const blank = { client1:{name:'',phone:'',email:''}, client2:{name:'',phone:'',email:''}, address:'', city:'', postalCode:'', repName:`${me.firstName} ${me.lastName}`.trim(), repOfficePhone:'', repEmail:me.email, referredBy:'', items:[], deliveryDates:[], paymentMethod:'cash', notes:'' };
+  const [form, setForm] = useState(existing ? { ...blank, ...existing } : blank);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [clientSigMode, setClientSigMode] = useState('inperson'); // inperson|remote|docusign
+  const [repSig, setRepSig] = useState(me.savedSignature || null);
+  const [clientSig, setClientSig] = useState(existing?.signatures?.client?.data || null);
+
+  const totals = calcTotals(form.items);
+
+  function setField(path, val) {
+    setForm(prev => {
+      const next = { ...prev };
+      const parts = path.split('.');
+      let obj = next;
+      for (let i=0; i<parts.length-1; i++) { obj[parts[i]] = {...obj[parts[i]]}; obj = obj[parts[i]]; }
+      obj[parts[parts.length-1]] = val;
+      return next;
+    });
+  }
+
+  async function save(status = 'draft') {
+    setSaving(true); setError('');
+    try {
+      const payload = {
+        ...form,
+        status,
+        totals,
+        signatures: { rep: repSig ? { data: repSig } : null, client: clientSig ? { data: clientSig } : null },
+        clientSignatureMode: clientSigMode,
+      };
+      let order;
+      if (existing?.id) {
+        order = await api.put(`orders?id=${existing.id}`, payload);
+      } else {
+        order = await api.post('orders', payload);
+      }
+      if (order.error) { setError(order.error); return; }
+
+      // If both signed → send invite/confirmation email
+      if (repSig && (clientSig || clientSigMode === 'docusign') && order.id) {
+        const firstDate = form.deliveryDates[0];
+        await api.post('invite', {
+          orderId: order.id,
+          clientEmail: form.client1.email,
+          clientName: form.client1.name,
+          orderTotal: totals.total,
+          firstDeliveryDate: firstDate ? `${firstDate.date} (${t(firstDate.slot)})` : '',
+        });
+      }
+
+      onSaved(order);
+    } catch(e) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div>
+      <h2 style={S.sectionTitle}>{existing ? t('editOrder') : t('newOrder')}</h2>
+
+      {/* Clients */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('client1')}</div>
+        <div style={S.row}>
+          <div style={S.col()}><label style={S.label}>{t('clientName')}</label><input style={S.input} value={form.client1.name} onChange={e=>setField('client1.name',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('clientPhone')}</label><input style={S.input} value={form.client1.phone} onChange={e=>setField('client1.phone',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('clientEmail')}</label><input type="email" style={S.input} value={form.client1.email} onChange={e=>setField('client1.email',e.target.value)} /></div>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('client2')}</div>
+        <div style={S.row}>
+          <div style={S.col()}><label style={S.label}>{t('clientName')}</label><input style={S.input} value={form.client2.name} onChange={e=>setField('client2.name',e.target.value)} placeholder={t('optional')} /></div>
+          <div style={S.col()}><label style={S.label}>{t('clientPhone')}</label><input style={S.input} value={form.client2.phone} onChange={e=>setField('client2.phone',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('clientEmail')}</label><input type="email" style={S.input} value={form.client2.email} onChange={e=>setField('client2.email',e.target.value)} /></div>
+        </div>
+      </div>
+
+      {/* Address */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('address')}</div>
+        <div style={S.row}>
+          <div style={{flex:3}}><label style={S.label}>{t('address')}</label><input style={S.input} value={form.address} onChange={e=>setField('address',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('city')}</label><input style={S.input} value={form.city} onChange={e=>setField('city',e.target.value)} /></div>
+          <div style={{flex:0.7}}><label style={S.label}>{t('postalCode')}</label><input style={S.input} value={form.postalCode} onChange={e=>setField('postalCode',e.target.value)} /></div>
+        </div>
+      </div>
+
+      {/* Rep info */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('repName')}</div>
+        <div style={S.row}>
+          <div style={S.col()}><label style={S.label}>{t('repName')}</label><input style={S.input} value={form.repName} onChange={e=>setField('repName',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('repOfficePhone')}</label><input style={S.input} value={form.repOfficePhone} onChange={e=>setField('repOfficePhone',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('repEmail')}</label><input type="email" style={S.input} value={form.repEmail} onChange={e=>setField('repEmail',e.target.value)} /></div>
+          <div style={S.col()}><label style={S.label}>{t('referredBy')}</label><input style={S.input} value={form.referredBy} onChange={e=>setField('referredBy',e.target.value)} /></div>
+        </div>
+      </div>
+
+      {/* Products */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('products')}</div>
+        <ProductPicker items={form.items} onChange={items=>setField('items',items)} t={t} />
+        {form.items.length > 0 && (
+          <div style={{marginTop:16,borderTop:'2px solid #eee',paddingTop:14,textAlign:'right'}}>
+            <div style={{marginBottom:4,color:'#555'}}>{t('subtotal')}: <strong>{fmt$(totals.subtotal)}</strong></div>
+            <div style={{marginBottom:4,color:'#555'}}>{t('tps')}: <strong>{fmt$(totals.tps)}</strong></div>
+            <div style={{marginBottom:8,color:'#555'}}>{t('tvq')}: <strong>{fmt$(totals.tvq)}</strong></div>
+            <div style={{fontSize:18,fontWeight:800,color:'#C41E1E'}}>{t('totalTaxes')}: {fmt$(totals.total)}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Delivery dates */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('deliveryDates')}</div>
+        <DeliveryDatePicker dates={form.deliveryDates} onChange={v=>setField('deliveryDates',v)} t={t} api={api} />
+      </div>
+
+      {/* Payment */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('paymentMethod')}</div>
+        <div style={S.row}>
+          {['cash','lendcare'].map(m=>(
+            <label key={m} style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'10px 16px',borderRadius:8,border:`2px solid ${form.paymentMethod===m?'#C41E1E':'#eee'}`,flex:1}}>
+              <input type="radio" name="payment" value={m} checked={form.paymentMethod===m} onChange={()=>setField('paymentMethod',m)} />
+              {m==='cash'?t('cashDoor'):t('lendcare')}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Signatures */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>{t('signatures')}</div>
+        <div style={S.row}>
+          {/* Rep signature */}
+          <div style={S.col()}>
+            <label style={S.label}>{t('repSignature')}</label>
+            {repSig
+              ? <div><img src={repSig} style={{width:'100%',maxHeight:150,objectFit:'contain',border:'1.5px solid #eee',borderRadius:8}} /><button style={{...S.btn('ghost'),marginTop:8,fontSize:12}} onClick={()=>setRepSig(null)}>Changer</button></div>
+              : <SignaturePad onSave={setRepSig} onClear={()=>setRepSig(null)} />
+            }
+          </div>
+          {/* Client signature */}
+          <div style={S.col()}>
+            <label style={S.label}>{t('clientSignature')}</label>
+            <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap'}}>
+              {['inperson','remote','docusign'].map(m=>(
+                <button key={m} style={{...S.btn(clientSigMode===m?'primary':'ghost'),fontSize:12,padding:'5px 10px'}} onClick={()=>setClientSigMode(m)}>
+                  {m==='inperson'?t('signInPerson'):m==='remote'?t('signRemote'):t('signDocuSign')}
+                </button>
+              ))}
+            </div>
+            {clientSigMode==='inperson' && <SignaturePad onSave={setClientSig} onClear={()=>setClientSig(null)} existingData={clientSig} />}
+            {clientSigMode==='remote' && <div style={{color:'#555',fontSize:13,padding:'12px 0'}}>{t('sendSignatureEmail')} — {t('signatureLinkSent')}</div>}
+            {clientSigMode==='docusign' && <div style={{...S.badge('#2563eb'),fontSize:13,padding:'8px 14px'}}>{t('docuSignSent')}</div>}
+          </div>
+        </div>
+        <div style={{marginTop:10,fontSize:13,color: repSig && (clientSig||clientSigMode==='docusign') ? '#16a34a':'#888'}}>
+          {repSig && (clientSig||clientSigMode==='docusign') ? '✓ '+t('bothSigned') : t('awaitingClientSign')}
+        </div>
+      </div>
+
+      {error && <div style={{color:'#dc2626',marginBottom:12}}>{error}</div>}
+      <div style={{display:'flex',gap:12,justifyContent:'flex-end',flexWrap:'wrap'}}>
+        <button style={S.btn('ghost')} onClick={onCancel} disabled={saving}>{t('cancel')}</button>
+        <button style={S.btn('ghost')} onClick={()=>save('draft')} disabled={saving}>{saving?t('loading'):t('statusDraft')}</button>
+        <button style={S.btn()} onClick={()=>save('confirmed')} disabled={saving}>{saving?t('loading'):t('confirm')}</button>
       </div>
     </div>
-    <div style={{ textAlign:"right" }}>
-      <div style={{ fontWeight:700, color:T.gold, fontSize:15, whiteSpace:"nowrap" }}>{fmtMoney(revenue)}</div>
-      <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>{fmtMoney(comm)} comm.</div>
-    </div>
-  </div>;
+  );
 }
 
-/* ─── Stats Bar ─── */
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+// ── OrderDetail ───────────────────────────────────────────────────────────────
+function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
+  const [loading, setLoading] = useState(false);
+  const [cancelModal, setCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [dateModal, setDateModal] = useState(false);
+  const [newDate, setNewDate] = useState('');
+  const [toast, setToast] = useState('');
 
-function StatsBar({ orders, activeOrders }) {
-  const today = todayStr();
-  const currentMonthKey = today.slice(0, 7);
-  const weekStart = (() => { const d=new Date(today+"T12:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().slice(0,10); })();
+  async function doAction(action, extra={}) {
+    setLoading(true);
+    const res = await api.patch(`orders?id=${order.id}`, { action, ...extra });
+    setLoading(false);
+    if (!res.error) { onUpdated(res); setToast(action==='markDelivered'?t('markDelivered'):'OK'); }
+  }
 
-  // Sales totals include ALL orders (including cancelled)
-  const totalSales      = orders.reduce((s,o)=>s+o.total,0);
-  const weekSales       = orders.filter(o=>o.date>=weekStart).reduce((s,o)=>s+o.total,0);
-  const monthSales      = orders.filter(o=>o.date.slice(0,7)===currentMonthKey).reduce((s,o)=>s+o.total,0);
-  const monthOrders     = orders.filter(o=>o.date.slice(0,7)===currentMonthKey).length;
-  const clients         = new Set(orders.map(o=>o.client)).size;
+  const { subtotal, tps, tvq, total } = order.totals || calcTotals(order.items||[]);
 
-  // Commission only on active (non-cancelled) orders
-  const totalComm       = activeOrders.reduce((s,o)=>s+o.total,0);
-  const weekActiveComm  = activeOrders.filter(o=>o.date>=weekStart).reduce((s,o)=>s+o.total,0);
-  const monthActiveComm = activeOrders.filter(o=>o.date.slice(0,7)===currentMonthKey).reduce((s,o)=>s+o.total,0);
-
-  return <div style={{ marginBottom:24 }}>
-    {/* Top row: 3 cards */}
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:12 }}>
-      <Card style={{ padding:16 }}>
-        <div style={{ fontSize:18, marginBottom:4 }}>🧾</div>
-        <div style={{ fontSize:18, fontWeight:700, color:T.text }}>{fmtMoney(totalSales)}</div>
-        <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Total Sales</div>
-        <div style={{ marginTop:8, paddingTop:8, borderTop:`1px solid ${T.border}` }}>
-          <div style={{ fontSize:18, fontWeight:700, color:T.gold }}>{fmtMoney(commission(totalComm))}</div>
-          <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>My Commission (9%)</div>
+  return (
+    <div>
+      <button style={{...S.btn('ghost'),marginBottom:16}} onClick={onBack}>← {t('back')}</button>
+      <div style={S.card}>
+        <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8,marginBottom:16}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:20}}>#{order.id}</div>
+            <div style={{color:'#888',fontSize:13}}>{fmtDate(order.createdAt)}</div>
+          </div>
+          <span style={S.badge(statusColor(order.status))}>{statusLabel(order.status,t)}</span>
         </div>
-      </Card>
-      <Card style={{ padding:16 }}>
-        <div style={{ fontSize:18, marginBottom:4 }}>🧑‍💼</div>
-        <div style={{ fontSize:22, fontWeight:700, color:T.gold }}>{clients}</div>
-        <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Unique Clients</div>
-      </Card>
-      <Card style={{ padding:16 }}>
-        <div style={{ fontSize:18, marginBottom:4 }}>📋</div>
-        <div style={{ fontSize:22, fontWeight:700, color:T.gold }}>{orders.length}</div>
-        <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Orders Filed</div>
-      </Card>
+
+        {/* Clients */}
+        <div style={S.row}>
+          <div style={S.col()}><strong>{t('client1')}</strong><br/>{order.client1?.name}<br/>{order.client1?.phone}<br/>{order.client1?.email}</div>
+          {order.client2?.name && <div style={S.col()}><strong>{t('client2')}</strong><br/>{order.client2.name}<br/>{order.client2.phone}</div>}
+          <div style={S.col()}><strong>{t('address')}</strong><br/>{order.address}<br/>{order.city} {order.postalCode}</div>
+          <div style={S.col()}><strong>{t('repName')}</strong><br/>{order.repName}<br/>{order.repEmail}</div>
+        </div>
+
+        {/* Products */}
+        <div style={{marginTop:20}}>
+          <div style={S.sectionTitle}>{t('products')}</div>
+          <table style={S.table}>
+            <thead><tr><th style={S.th}>{t('products')}</th><th style={S.th}>{t('format')}</th><th style={S.th}>{t('quantity')}</th><th style={S.th}>{t('unitPrice')}</th><th style={S.th}>{t('lineTotal')}</th></tr></thead>
+            <tbody>{(order.items||[]).map(i=><tr key={i.code}><td style={S.td}>{i.name}</td><td style={S.td}>{i.format}</td><td style={S.td}>{i.qty}</td><td style={S.td}>{fmt$(i.price)}</td><td style={S.td}><strong>{fmt$(i.price*i.qty)}</strong></td></tr>)}</tbody>
+          </table>
+          <div style={{textAlign:'right',marginTop:12}}>
+            <div style={{color:'#555'}}>{t('subtotal')}: {fmt$(subtotal)}</div>
+            <div style={{color:'#555'}}>{t('tps')}: {fmt$(tps)}</div>
+            <div style={{color:'#555'}}>{t('tvq')}: {fmt$(tvq)}</div>
+            <div style={{fontSize:17,fontWeight:800,color:'#C41E1E'}}>{t('totalTaxes')}: {fmt$(total)}</div>
+          </div>
+        </div>
+
+        {/* Delivery dates */}
+        {order.deliveryDates?.length > 0 && (
+          <div style={{marginTop:16}}>
+            <div style={S.sectionTitle}>{t('deliveryDates')}</div>
+            {order.deliveryDates.map((d,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px solid #f0f0f0'}}>{d.date} — {t(d.slot)}</div>)}
+          </div>
+        )}
+
+        {/* Payment */}
+        <div style={{marginTop:12}}><strong>{t('paymentMethod')}:</strong> {order.paymentMethod==='lendcare'?t('lendcare'):t('cashDoor')}</div>
+
+        {/* Signatures */}
+        {(order.signatures?.rep || order.signatures?.client) && (
+          <div style={{marginTop:16}}>
+            <div style={S.sectionTitle}>{t('signatures')}</div>
+            <div style={S.row}>
+              {order.signatures.rep?.data && <div style={S.col()}><label style={S.label}>{t('repSignature')}</label><img src={order.signatures.rep.data} style={{width:'100%',maxHeight:100,objectFit:'contain',border:'1px solid #eee',borderRadius:6}} /></div>}
+              {order.signatures.client?.data && <div style={S.col()}><label style={S.label}>{t('clientSignature')}</label><img src={order.signatures.client.data} style={{width:'100%',maxHeight:100,objectFit:'contain',border:'1px solid #eee',borderRadius:6}} /></div>}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{display:'flex',gap:10,marginTop:20,flexWrap:'wrap'}}>
+          {me.role==='delivery' && order.status==='confirmed' && <button style={S.btn()} onClick={()=>doAction('markDelivered')} disabled={loading}>{t('markAsDelivered')}</button>}
+          {['client_service','manager'].includes(me.role) && order.status==='confirmed' && <button style={S.btn()} onClick={()=>doAction('markDelivered')} disabled={loading}>{t('markAsDelivered')}</button>}
+          {['rep','client_service','manager'].includes(me.role) && order.status!=='cancelled' && order.status!=='delivered' && <button style={S.btn('danger')} onClick={()=>setCancelModal(true)} disabled={loading}>{t('cancelOrder')}</button>}
+          {me.role==='client' && order.status==='confirmed' && <button style={S.btn('ghost')} onClick={()=>setDateModal(true)}>{t('requestDateChange')}</button>}
+        </div>
+      </div>
+
+      {/* Cancel modal */}
+      {cancelModal && (
+        <div style={S.modal} onClick={()=>setCancelModal(false)}>
+          <div style={S.modalBox} onClick={e=>e.stopPropagation()}>
+            <h3 style={{marginTop:0}}>{t('confirmCancel')}</h3>
+            <label style={S.label}>{t('cancelReason')}</label>
+            <input style={S.input} value={cancelReason} onChange={e=>setCancelReason(e.target.value)} />
+            <div style={{display:'flex',gap:10,marginTop:16,justifyContent:'flex-end'}}>
+              <button style={S.btn('ghost')} onClick={()=>setCancelModal(false)}>{t('cancel')}</button>
+              <button style={S.btn('danger')} onClick={()=>{doAction('cancel',{reason:cancelReason});setCancelModal(false);}}>{t('confirm')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Date change modal */}
+      {dateModal && (
+        <div style={S.modal} onClick={()=>setDateModal(false)}>
+          <div style={S.modalBox} onClick={e=>e.stopPropagation()}>
+            <h3 style={{marginTop:0}}>{t('dateChangeRequest')}</h3>
+            <label style={S.label}>{t('preferredNewDate')}</label>
+            <input type="date" style={S.input} value={newDate} onChange={e=>setNewDate(e.target.value)} />
+            <div style={{display:'flex',gap:10,marginTop:16,justifyContent:'flex-end'}}>
+              <button style={S.btn('ghost')} onClick={()=>setDateModal(false)}>{t('cancel')}</button>
+              <button style={S.btn()} onClick={()=>{doAction('requestDateChange',{newDate});setDateModal(false);setToast(t('dateChangeSubmitted'));}}>{t('submit')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
     </div>
-    {/* Bottom row: 2 wide cards */}
-    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-      <Card style={{ padding:20, display:"flex", flexDirection:"column", justifyContent:"space-between" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-          <span style={{ fontSize:18 }}>📅</span>
-          <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>THIS WEEK</span>
-        </div>
-        <div>
-          <div style={{ fontSize:28, fontWeight:700, color:T.text, letterSpacing:"-0.5px" }}>{fmtMoney(weekSales)}</div>
-          <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{orders.filter(o=>o.date>=weekStart).length} order{orders.filter(o=>o.date>=weekStart).length!==1?"s":""} this week</div>
-        </div>
-        <div style={{ marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
-          <div style={{ fontSize:22, fontWeight:700, color:T.gold }}>{fmtMoney(commission(weekActiveComm))}</div>
-          <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>My Commission (9%)</div>
-        </div>
-      </Card>
-      <Card style={{ padding:20, display:"flex", flexDirection:"column", justifyContent:"space-between", border:`1px solid ${T.gold}30` }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-          <span style={{ fontSize:18 }}>📆</span>
-          <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>THIS MONTH</span>
-        </div>
-        <div>
-          <div style={{ fontSize:28, fontWeight:700, color:T.text, letterSpacing:"-0.5px" }}>{fmtMoney(monthSales)}</div>
-          <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{monthOrders} order{monthOrders!==1?"s":""} this month</div>
-        </div>
-        <div style={{ marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
-          <div style={{ fontSize:22, fontWeight:700, color:T.gold }}>{fmtMoney(commission(monthActiveComm))}</div>
-          <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>My Commission (9%)</div>
-        </div>
-      </Card>
-    </div>
-  </div>;
+  );
 }
 
-/* ─── Upload Tab ─── */
-function UploadTab({ onOrdersAdded, files, setFiles }) {
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef();
+// ── OrdersList ────────────────────────────────────────────────────────────────
+function OrdersList({ t, api, me, onSelectOrder, onNewOrder }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
 
-  const processOne = useCallback(async (entry) => {
-    setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"processing"} : e));
-    let lastError;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt > 0) await new Promise(r => setTimeout(r, 3000 * attempt));
-        const data = await extractFromFile(entry.file);
-        const order = { id: Date.now()+Math.random(), fileName:entry.file.name, ...data };
-        onOrdersAdded(order);
-        setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"done"} : e));
-        return;
-      } catch(err) {
-        lastError = err;
-      }
-    }
-    setFiles(prev => prev.map(e => e.name===entry.name ? {...e, status:"error", error:lastError?.message} : e));
-  }, [onOrdersAdded]);
+  useEffect(()=>{
+    api.get('orders').then(r=>{ if(Array.isArray(r)) setOrders(r); setLoading(false); }).catch(()=>setLoading(false));
+  },[]);
 
-  const process = useCallback(async (newFiles) => {
-    const entries = newFiles.map(f => ({ file:f, status:"processing", name:f.name }));
-    setFiles(prev => {
-      const existingNames = new Set(prev.map(e => e.name));
-      const fresh = entries.filter(e => !existingNames.has(e.name));
-      return [...prev, ...fresh];
-    });
-    for (const entry of entries) {
-      await processOne(entry);
-    }
-  }, [processOne]);
+  const filtered = orders.filter(o => filter==='all' || o.status===filter);
 
-  const retry = useCallback((entry) => {
-    processOne(entry);
-  }, [processOne]);
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:10}}>
+        <h2 style={{margin:0,fontWeight:800}}>{me.role==='rep'?t('myOrders'):t('allOrders')}</h2>
+        {['rep','client_service'].includes(me.role) && <button style={S.btn()} onClick={onNewOrder}>+ {t('newOrder')}</button>}
+      </div>
 
-  const onDrop = useCallback(e => {
-    e.preventDefault(); setDragging(false);
-    const dropped = Array.from(e.dataTransfer.files).filter(f => /pdf|excel|spreadsheet|csv/.test(f.type) || /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
-    if (dropped.length) process(dropped);
-  }, [process]);
+      <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+        {['all','draft','confirmed','delivered','cancelled'].map(s=>(
+          <button key={s} style={{...S.btn(filter===s?'primary':'ghost'),padding:'6px 14px'}} onClick={()=>setFilter(s)}>
+            {s==='all'?t('all'):statusLabel(s,t)} ({orders.filter(o=>s==='all'||o.status===s).length})
+          </button>
+        ))}
+      </div>
 
-  const onPick = e => {
-    const picked = Array.from(e.target.files);
-    if (picked.length) process(picked);
-    e.target.value = "";
-  };
+      {loading && <div style={{color:'#aaa',padding:24}}>{t('loading')}</div>}
+      {!loading && filtered.length===0 && <div style={{color:'#aaa',padding:24}}>{t('noResults')}</div>}
 
-  const dotStyle = s => ({
-    width:10, height:10, borderRadius:"50%",
-    background: s==="done" ? T.upcoming : s==="error" ? T.overdue : T.gold,
-    animation: s==="processing" ? "pulse 1s infinite" : "none",
-    flexShrink:0,
+      {filtered.map(o=>(
+        <div key={o.id} style={{...S.card,cursor:'pointer',transition:'box-shadow .15s'}}
+          onClick={()=>onSelectOrder(o)}
+          onMouseOver={e=>e.currentTarget.style.boxShadow='0 3px 14px rgba(196,30,30,.12)'}
+          onMouseOut={e=>e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,.09)'}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:15}}>#{o.id}</div>
+              <div style={{fontSize:13,color:'#777',marginTop:2}}>{o.client1?.name} · {o.city}</div>
+              <div style={{fontSize:12,color:'#aaa',marginTop:2}}>{fmtDate(o.createdAt)} · {o.repName}</div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <span style={S.badge(statusColor(o.status))}>{statusLabel(o.status,t)}</span>
+              <div style={{fontWeight:700,fontSize:15,marginTop:6,color:'#C41E1E'}}>{fmt$(o.totals?.total || calcTotals(o.items||[]).total)}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+function Dashboard({ t, api, me }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{
+    api.get('orders').then(r=>{ if(Array.isArray(r)) setOrders(r); setLoading(false); }).catch(()=>setLoading(false));
+  },[]);
+
+  const delivered = orders.filter(o=>o.status==='delivered');
+  const cancelled = orders.filter(o=>o.status==='cancelled');
+  const confirmed = orders.filter(o=>o.status==='confirmed');
+
+  const deliveredSales = delivered.reduce((s,o)=>s+(o.totals?.total||calcTotals(o.items||[]).total),0);
+  const totalCommission = deliveredSales * COMMISSION_RATE;
+  const cancelRate = orders.length ? ((cancelled.length/orders.length)*100).toFixed(1) : 0;
+
+  // Group by rep for manager
+  const byRep = {};
+  orders.forEach(o=>{
+    const k = o.repName || o.repEmail || 'Inconnu';
+    if (!byRep[k]) byRep[k] = { name:k, orders:[], delivered:0, sales:0 };
+    byRep[k].orders.push(o);
+    if (o.status==='delivered') { byRep[k].delivered++; byRep[k].sales += o.totals?.total || 0; }
   });
 
-  return <div>
-    <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }`}</style>
-    <div onDragOver={e=>{e.preventDefault();setDragging(true)}} onDragLeave={()=>setDragging(false)} onDrop={onDrop}
-      style={{ border:`2px dashed ${dragging ? T.gold : T.border}`, borderRadius:16, padding:"60px 40px", textAlign:"center", cursor:"pointer", transition:"border-color .2s", marginBottom:24, background: dragging ? `${T.gold}08` : "transparent" }}
-      onClick={()=>inputRef.current.click()}>
-      <div style={{ fontSize:40, marginBottom:12 }}>📤</div>
-      <div style={{ color:T.text, fontWeight:600, fontSize:16, marginBottom:6 }}>Drop files here or click to browse</div>
-      <div style={{ color:T.muted, fontSize:13 }}>Supports PDF, Excel (.xlsx, .xls), CSV</div>
-      <input ref={inputRef} type="file" multiple accept=".pdf,.xlsx,.xls,.csv" onChange={onPick} style={{ display:"none" }}/>
+  const statBox = (label, value, color='#C41E1E') => (
+    <div style={{...S.card,flex:1,minWidth:140,textAlign:'center'}}>
+      <div style={{fontSize:28,fontWeight:800,color}}>{value}</div>
+      <div style={{fontSize:12,color:'#888',marginTop:4}}>{label}</div>
     </div>
+  );
 
-    {files.length > 0 && <Card>
-      <div style={{ fontWeight:600, color:T.text, marginBottom:14, fontSize:14 }}>Processing Queue</div>
-      {files.map((f,i) => (
-        <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 0", borderBottom: i<files.length-1 ? `1px solid ${T.border}` : "none" }}>
-          <div style={dotStyle(f.status)}/>
-          <span style={{ flex:1, color:T.text, fontSize:14, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
-          {f.status === "error" ? (
-            <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed</span>
-                <button onClick={()=>retry(f)}
-                  style={{ padding:"3px 12px", borderRadius:20, border:`1px solid ${T.gold}`, background:"transparent", color:T.gold, cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:T.font }}>
-                  Retry
-                </button>
-              </div>
-              {f.error && <span style={{ fontSize:11, color:T.overdue, maxWidth:200, textAlign:"right" }}>{f.error}</span>}
-            </div>
-          ) : (
-            <span style={{ fontSize:12, color: f.status==="done"?T.upcoming:T.gold, fontWeight:600 }}>
-              {f.status==="done"?"Extracted":"Processing…"}
-            </span>
-          )}
-        </div>
-      ))}
-    </Card>}
-  </div>;
-}
+  if (loading) return <div style={{color:'#aaa',padding:24}}>{t('loading')}</div>;
 
-/* ─── All Orders Tab ─── */
-function AllOrdersTab({ orders, onDelete }) {
-  if (!orders.length) return <Empty msg="No orders yet. Upload files to get started."/>;
-  return <Card style={{ padding:0, overflow:"hidden" }}>
-    <div style={{ overflowX:"auto" }}>
-      <table style={{ width:"100%", borderCollapse:"collapse", fontFamily:T.font }}>
-        <thead>
-          <tr style={{ background:`${T.gold}12` }}>
-            {["Client","Order Date","Delivery Date","Items","Sales","Commission","File",""].map(h=>(
-              <th key={h} style={{ padding:"12px 16px", textAlign:"left", fontSize:12, color:T.muted, fontWeight:600, borderBottom:`1px solid ${T.border}`, whiteSpace:"nowrap" }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {[...orders].sort((a,b)=>b.date.localeCompare(a.date)).map(o=>{
-            const ds = deliveryStatus(o.deliveryDate);
-            return <tr key={o.id} style={{ borderBottom:`1px solid ${T.border}28` }}>
-              <td style={{ padding:"12px 16px", color:T.text, fontWeight:600, fontSize:14 }}>{o.client}</td>
-              <td style={{ padding:"12px 16px", color:T.muted, fontSize:13, whiteSpace:"nowrap" }}>{fmtDate(o.date)}</td>
-              <td style={{ padding:"12px 16px", whiteSpace:"nowrap" }}>
-                {o.deliveryDate
-                  ? <span style={{ background:`${statusColor(ds)}20`, color:statusColor(ds), padding:"3px 10px", borderRadius:20, fontSize:12, fontWeight:600 }}>{fmtDate(o.deliveryDate)}</span>
-                  : <span style={{ color:T.muted, fontSize:12 }}>—</span>}
-              </td>
-              <td style={{ padding:"12px 16px", maxWidth:200 }}>
-                {o.items.slice(0,3).map((it,i)=><Badge key={i} label={it} bg={T.border} color={T.text}/>)}
-                {o.items.length>3 && <Badge label={`+${o.items.length-3}`} bg={T.border} color={T.muted}/>}
-              </td>
-              <td style={{ padding:"12px 16px", color:T.text, fontWeight:600, whiteSpace:"nowrap" }}>{fmtMoney(o.total)}</td>
-              <td style={{ padding:"12px 16px", color:T.gold, fontWeight:700, whiteSpace:"nowrap" }}>{fmtMoney(commission(o.total))}</td>
-              <td style={{ padding:"12px 16px", color:T.muted, fontSize:12, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.fileName}</td>
-              <td style={{ padding:"12px 16px" }}>
-                <button onClick={()=>onDelete(o.id)} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", padding:"4px 10px", fontSize:12 }}>Delete</button>
-              </td>
-            </tr>;
-          })}
-        </tbody>
-      </table>
-    </div>
-  </Card>;
-}
+  return (
+    <div>
+      <h2 style={{fontWeight:800,marginBottom:20}}>{t('dashboard')}</h2>
+      <div style={S.row}>
+        {statBox(t('ordersCount'), orders.length, '#2563eb')}
+        {statBox(t('delivered'), delivered.length, '#16a34a')}
+        {statBox(t('cancelled'), cancelled.length, '#dc2626')}
+        {statBox(t('totalSales'), fmt$(deliveredSales))}
+        {me.role==='rep' && statBox(t('totalCommission'), fmt$(totalCommission), '#d97706')}
+        {me.role==='rep' && statBox(t('cancellationRate'), `${cancelRate}%`, '#dc2626')}
+      </div>
 
-/* ─── Period Tabs (Weekly/Monthly/Yearly) ─── */
-function PeriodTab({ orders, mode }) {
-  const [selected, setSelected] = useState(null);
-
-  // orders here = ALL orders (incl. cancelled), so sales totals are complete
-  const grouped = useMemo(() => {
-    const map = {};
-    orders.forEach(o => {
-      const key = mode==="weekly" ? getWeekKey(o.date) : mode==="monthly" ? getMonthKey(o.date) : getYearKey(o.date);
-      if (!key) return;
-      if (!map[key]) map[key] = [];
-      map[key].push(o);
-    });
-    return map;
-  }, [orders, mode]);
-
-  const periods = useMemo(() => Object.keys(grouped).sort((a,b)=>b.localeCompare(a)), [grouped]);
-  const revenues = periods.map(p=>grouped[p].reduce((s,o)=>s+o.total,0));
-  // Commission only on non-cancelled orders within each period
-  const commissions = periods.map(p=>grouped[p].filter(o=>!o.cancelled).reduce((s,o)=>s+commission(o.total),0));
-  const maxRev = Math.max(...revenues, 1);
-  const grandTotal = revenues.reduce((s,v)=>s+v,0);
-  const grandComm = commissions.reduce((s,v)=>s+v,0);
-
-  function periodLabel(key) {
-    if (mode==="weekly") {
-      const [y,w] = key.split("-W");
-      return `Week ${parseInt(w)}, ${y}`;
-    }
-    if (mode==="monthly") {
-      const [y,m] = key.split("-");
-      const names=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      return `${names[parseInt(m)]} ${y}`;
-    }
-    return key;
-  }
-
-  function monthBreakdown(yearKey) {
-    const yr = grouped[yearKey] || [];
-    const map = {};
-    yr.forEach(o=>{ const m=o.date.slice(0,7); map[m]=(map[m]||0)+o.total; });
-    return Object.keys(map).sort().map(k=>({ key:k, total:map[k] }));
-  }
-
-  const selOrders = selected ? (grouped[selected]||[]) : [];
-  const selRev = selOrders.reduce((s,o)=>s+o.total,0);
-  const selComm = selOrders.filter(o=>!o.cancelled).reduce((s,o)=>s+commission(o.total),0);
-
-  if (!periods.length) return <Empty msg={`No ${mode} data yet.`}/>;
-
-  return <div>
-    {periods.map((p,i)=>(
-      <PeriodRow key={p} label={periodLabel(p)} revenue={revenues[i]} commissionAmount={commissions[i]} count={grouped[p].length} pct={Math.round(revenues[i]/maxRev*100)} onClick={()=>setSelected(selected===p?null:p)} isSelected={selected===p}/>
-    ))}
-    <GrandTotal label="All-Time Total" amount={grandTotal} commissionAmount={grandComm}/>
-
-    {selected && <SidePanel title={periodLabel(selected)} onClose={()=>setSelected(null)}>
-      {mode==="yearly" && (<div style={{ marginBottom:20 }}>
-        <div style={{ fontWeight:600, fontSize:13, color:T.muted, marginBottom:10 }}>Month Breakdown</div>
-        {monthBreakdown(selected).map(({key,total})=>{
-          const names=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-          const [,m]=key.split("-");
-          const mRev = monthBreakdown(selected).reduce((s,x)=>Math.max(s,x.total),1);
-          return <div key={key} style={{ marginBottom:8 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:3 }}>
-              <span style={{ color:T.muted }}>{names[parseInt(m)]}</span>
-              <span style={{ color:T.gold, fontWeight:600 }}>{fmtMoney(total)}</span>
-            </div>
-            <div style={{ height:3, borderRadius:2, background:T.border }}>
-              <div style={{ width:`${Math.round(total/mRev*100)}%`, height:3, borderRadius:2, background:T.gold }}/>
-            </div>
-          </div>;
-        })}
-        <div style={{ height:1, background:T.border, margin:"16px 0" }}/>
-      </div>)}
-
-      {selOrders.sort((a,b)=>b.date.localeCompare(a.date)).map(o=>(
-        <div key={o.id} style={{ padding:"12px 0", borderBottom:`1px solid ${T.border}` }}>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-            <span style={{ fontWeight:600, color:T.text }}>{o.client}</span>
-            <div style={{ textAlign:"right" }}>
-              <div style={{ color:T.text, fontWeight:600, fontSize:13 }}>{fmtMoney(o.total)}</div>
-              <div style={{ color:T.gold, fontWeight:700, fontSize:12 }}>{fmtMoney(commission(o.total))} comm.</div>
-            </div>
-          </div>
-          <div style={{ fontSize:12, color:T.muted }}>{fmtDate(o.date)}{o.deliveryDate ? ` → ${fmtDate(o.deliveryDate)}` : ""}</div>
-          <div style={{ marginTop:6 }}>{o.items.slice(0,2).map((it,i)=><Badge key={i} label={it} bg={T.border} color={T.text}/>)}</div>
-        </div>
-      ))}
-      <GrandTotal label="Period Total" amount={selRev} commissionAmount={selComm}/>
-    </SidePanel>}
-  </div>;
-}
-
-/* ─── Clients Tab ─── */
-function ClientsTab({ orders }) {
-  const [search, setSearch] = useState("");
-
-  const clients = useMemo(() => {
-    const map = {};
-    orders.forEach(o => {
-      if (!map[o.client]) map[o.client] = { orders:[], total:0 };
-      map[o.client].orders.push(o);
-      map[o.client].total += o.total;
-    });
-    const grand = orders.reduce((s,o)=>s+o.total,0)||1;
-    return Object.entries(map).map(([name,d])=>({
-      name,
-      total: d.total,
-      count: d.orders.length,
-      lastOrder: d.orders.map(o=>o.date).sort().at(-1),
-      nextDelivery: d.orders.map(o=>o.deliveryDate).filter(Boolean).filter(dd=>dd>=todayStr()).sort()[0]||null,
-      pct: Math.round(d.total/grand*100),
-    })).sort((a,b)=>b.total-a.total);
-  }, [orders]);
-
-  const maxRev = clients[0]?.total || 1;
-  const filtered = clients.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
-
-  if (!clients.length) return <Empty msg="No client data yet."/>;
-
-  return <div>
-    <div style={{ marginBottom:16 }}>
-      <input
-        value={search}
-        onChange={e=>setSearch(e.target.value)}
-        placeholder="Search clients…"
-        style={{ width:"100%", padding:"10px 16px", borderRadius:10, border:`1px solid ${T.border}`, background:T.card, color:T.text, fontSize:14, fontFamily:T.font, outline:"none", boxSizing:"border-box" }}
-      />
-    </div>
-    {filtered.length === 0 && <Empty msg="No clients match your search."/>}
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:12 }}>
-      {filtered.map((c,i)=>(
-      <Card key={c.name}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
-          <div>
-            <div style={{ fontWeight:700, fontSize:15, color:T.text }}>{c.name}</div>
-            <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>{c.count} order{c.count!==1?"s":""}</div>
-          </div>
-          {i===0 && <Badge label="Top Client" bg={T.gold} color={T.bg}/>}
-        </div>
-        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
-          <div>
-            <div style={{ fontSize:11, color:T.muted }}>Last Order</div>
-            <div style={{ fontSize:13, color:T.text, fontWeight:500 }}>{fmtDate(c.lastOrder)}</div>
-          </div>
-          {c.nextDelivery && <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:11, color:T.muted }}>Next Delivery</div>
-            <div style={{ fontSize:13, color:T.upcoming, fontWeight:600 }}>{fmtDate(c.nextDelivery)}</div>
-          </div>}
-        </div>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-          <div>
-            <div style={{ fontSize:18, fontWeight:700, color:T.text }}>{fmtMoney(c.total)}</div>
-            <div style={{ fontSize:12, color:T.gold, fontWeight:600 }}>{fmtMoney(commission(c.total))} comm.</div>
-          </div>
-          <span style={{ fontSize:13, color:T.muted }}>{c.pct}% of sales</span>
-        </div>
-        <div style={{ height:4, borderRadius:2, background:T.border }}>
-          <div style={{ width:`${Math.round(c.total/maxRev*100)}%`, height:4, borderRadius:2, background:T.gold }}/>
-        </div>
-      </Card>
-    ))}
-    </div>
-  </div>;
-}
-
-/* ─── Deliveries Tab ─── */
-function DeliveriesTab({ orders, onToggleDeliveryCancel, onCancel }) {
-  const [filter, setFilter] = useState("all");
-
-  const enriched = useMemo(()=>orders.map(o=>({...o, ds:deliveryStatus(o.deliveryDate)})), [orders]);
-
-  const filtered = useMemo(()=>{
-    if (filter==="all") return enriched;
-    return enriched.filter(o=>o.ds===filter);
-  },[enriched,filter]);
-
-  const chips = [
-    { key:"all", label:"All" },
-    { key:"delivered", label:"Delivered" },
-    { key:"today", label:"Today" },
-    { key:"upcoming", label:"Upcoming" },
-    { key:"no-date", label:"No Date" },
-  ];
-
-  const clientGroups = useMemo(()=>{
-    const map = {};
-    filtered.forEach(o=>{
-      if (!map[o.client]) map[o.client]={client:o.client,orders:[]};
-      map[o.client].orders.push(o);
-    });
-    const urgencyScore = ds => ({"delivery-cancelled":0,today:1,upcoming:2,delivered:3,"no-date":4})[ds]??4;
-    return Object.values(map).sort((a,b)=>{
-      const sa=Math.min(...a.orders.map(o=>urgencyScore(o.ds)));
-      const sb=Math.min(...b.orders.map(o=>urgencyScore(o.ds)));
-      return sa-sb;
-    });
-  },[filtered]);
-
-  return <div>
-    <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
-      {chips.map(c=>(
-        <button key={c.key} onClick={()=>setFilter(c.key)}
-          style={{ padding:"6px 16px", borderRadius:20, border:`1px solid ${filter===c.key ? T.gold : T.border}`, background: filter===c.key ? `${T.gold}20` : "transparent", color: filter===c.key ? T.gold : T.muted, cursor:"pointer", fontSize:13, fontWeight:filter===c.key?600:400 }}>
-          {c.label}
-        </button>
-      ))}
-    </div>
-
-    {!filtered.length ? <Empty msg="No deliveries match this filter."/> : <>
-      <Card style={{ padding:0, overflow:"hidden", marginBottom:24 }}>
-        <div style={{ overflowX:"auto" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontFamily:T.font }}>
-            <thead>
-              <tr style={{ background:`${T.gold}12` }}>
-                {["Client","Order Date","Delivery Date","Status","Items","Sales","Commission",""].map(h=>(
-                  <th key={h} style={{ padding:"12px 16px", textAlign:"left", fontSize:12, color:T.muted, fontWeight:600, borderBottom:`1px solid ${T.border}`, whiteSpace:"nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+      {me.role==='manager' && (
+        <div style={S.card}>
+          <div style={S.sectionTitle}>{t('teamPerformance')}</div>
+          <table style={S.table}>
+            <thead><tr>
+              <th style={S.th}>{t('repName')}</th>
+              <th style={S.th}>{t('ordersCount')}</th>
+              <th style={S.th}>{t('delivered')}</th>
+              <th style={S.th}>{t('totalSales')}</th>
+              <th style={S.th}>{t('totalCommission')}</th>
+            </tr></thead>
             <tbody>
-              {filtered.sort((a,b)=>{
-                const s={"delivery-cancelled":0,today:1,upcoming:2,delivered:3,"no-date":4};
-                return (s[a.ds]??3)-(s[b.ds]??3) || (a.deliveryDate||"z").localeCompare(b.deliveryDate||"z");
-              }).map(o=>(
-                <tr key={o.id} style={{ borderBottom:`1px solid ${T.border}28` }}>
-                  <td style={{ padding:"12px 16px", color:T.text, fontWeight:600, fontSize:14 }}>{o.client}</td>
-                  <td style={{ padding:"12px 16px", color:T.muted, fontSize:13, whiteSpace:"nowrap" }}>{fmtDate(o.date)}</td>
-                  <td style={{ padding:"12px 16px", color:T.muted, fontSize:13, whiteSpace:"nowrap" }}>{fmtDate(o.deliveryDate)}</td>
-                  <td style={{ padding:"12px 16px" }}>
-                    <span style={{ background:`${statusColor(o.ds)}20`, color:statusColor(o.ds), padding:"3px 12px", borderRadius:20, fontSize:12, fontWeight:600 }}>{statusLabel(o.ds)}</span>
-                  </td>
-                  <td style={{ padding:"12px 16px" }}>
-                    {o.items.slice(0,2).map((it,i)=><Badge key={i} label={it} bg={T.border} color={T.text}/>)}
-                    {o.items.length>2 && <Badge label={`+${o.items.length-2}`} bg={T.border} color={T.muted}/>}
-                  </td>
-                  <td style={{ padding:"12px 16px", color:T.text, fontWeight:600, whiteSpace:"nowrap" }}>{fmtMoney(o.total)}</td>
-                  <td style={{ padding:"12px 16px", color:T.gold, fontWeight:700, whiteSpace:"nowrap" }}>{fmtMoney(commission(o.total))}</td>
-                  <td style={{ padding:"12px 16px" }}>
-                    <button onClick={()=>onCancel(o.id)} style={{ background:"none", border:`1px solid ${T.overdue}40`, borderRadius:6, color:T.overdue, cursor:"pointer", padding:"4px 10px", fontSize:12 }}>Cancel</button>
-                  </td>
+              {Object.values(byRep).sort((a,b)=>b.sales-a.sales).map(rep=>(
+                <tr key={rep.name}>
+                  <td style={S.td}><strong>{rep.name}</strong></td>
+                  <td style={S.td}>{rep.orders.length}</td>
+                  <td style={S.td}>{rep.delivered}</td>
+                  <td style={S.td}>{fmt$(rep.sales)}</td>
+                  <td style={S.td} style={{color:'#d97706',fontWeight:700}}>{fmt$(rep.sales*COMMISSION_RATE)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </Card>
-
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:12 }}>
-        {clientGroups.map(g=>{
-          const urgency = Math.min(...g.orders.map(o=>({today:0,upcoming:1,delivered:2,"no-date":3})[o.ds]??3));
-          const urgencyDsMap=["today","upcoming","delivered","no-date"];
-          const borderColor = statusColor(urgencyDsMap[urgency]||"no-date");
-          return <Card key={g.client} style={{ borderLeft:`3px solid ${borderColor}` }}>
-            <div style={{ fontWeight:700, fontSize:14, color:T.text, marginBottom:10 }}>{g.client}</div>
-            {g.orders.map(o=>(
-              <div key={o.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:`1px solid ${T.border}28`, fontSize:13 }}>
-                <div>
-                  <span style={{ color:statusColor(o.ds), fontWeight:600 }}>{fmtDate(o.deliveryDate)}</span>
-                  <span style={{ color:T.muted, marginLeft:8 }}>{o.items[0]||"Order"}</span>
-                </div>
-                <span style={{ background:`${statusColor(o.ds)}20`, color:statusColor(o.ds), padding:"2px 8px", borderRadius:20, fontSize:11, fontWeight:600 }}>{statusLabel(o.ds)}</span>
-              </div>
-            ))}
-          </Card>;
-        })}
-      </div>
-    </>}
-  </div>;
+      )}
+    </div>
+  );
 }
 
-/* ─── Cancelled Tab ─── */
-function CancelledTab({ orders, onRestore, onDelete }) {
-  if (!orders.length) return <Empty msg="No cancelled orders."/>;
-  const totalLost = orders.reduce((s,o)=>s+o.total,0);
-  return <div>
-    <Card style={{ padding:12, marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center", background:`${T.overdue}10`, border:`1px solid ${T.overdue}30` }}>
-      <div style={{ fontSize:13, color:T.muted }}>{orders.length} cancelled order{orders.length!==1?"s":""}</div>
-      <div style={{ textAlign:"right" }}>
-        <div style={{ fontSize:15, fontWeight:700, color:T.overdue }}>{fmtMoney(totalLost)} lost sales</div>
-        <div style={{ fontSize:12, color:T.muted, marginTop:1 }}>{fmtMoney(commission(totalLost))} lost commission</div>
-      </div>
-    </Card>
-    <Card style={{ padding:0, overflow:"hidden" }}>
-      <div style={{ overflowX:"auto" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse", fontFamily:T.font }}>
-          <thead>
-            <tr style={{ background:`${T.overdue}10` }}>
-              {["Client","Order Date","Items","Sales","Commission","File",""].map(h=>(
-                <th key={h} style={{ padding:"12px 16px", textAlign:"left", fontSize:12, color:T.muted, fontWeight:600, borderBottom:`1px solid ${T.border}`, whiteSpace:"nowrap" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {[...orders].sort((a,b)=>b.date.localeCompare(a.date)).map(o=>(
-              <tr key={o.id} style={{ borderBottom:`1px solid ${T.border}28`, opacity:0.75 }}>
-                <td style={{ padding:"12px 16px", fontWeight:600, fontSize:14 }}>
-                  <div style={{ color:T.text }}>{o.client}</div>
-                  <div style={{ fontSize:11, marginTop:2 }}><span style={{ background:`${T.overdue}20`, color:T.overdue, padding:"1px 8px", borderRadius:20, fontWeight:600 }}>Cancelled</span></div>
-                </td>
-                <td style={{ padding:"12px 16px", color:T.muted, fontSize:13, whiteSpace:"nowrap" }}>{fmtDate(o.date)}</td>
-                <td style={{ padding:"12px 16px", maxWidth:200 }}>
-                  {o.items.slice(0,3).map((it,i)=><Badge key={i} label={it} bg={T.border} color={T.muted}/>)}
-                  {o.items.length>3 && <Badge label={`+${o.items.length-3}`} bg={T.border} color={T.muted}/>}
-                </td>
-                <td style={{ padding:"12px 16px", color:T.muted, fontWeight:600, whiteSpace:"nowrap", textDecoration:"line-through" }}>{fmtMoney(o.total)}</td>
-                <td style={{ padding:"12px 16px", color:T.muted, whiteSpace:"nowrap", textDecoration:"line-through" }}>{fmtMoney(commission(o.total))}</td>
-                <td style={{ padding:"12px 16px", color:T.muted, fontSize:12, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.fileName}</td>
-                <td style={{ padding:"12px 16px" }}>
-                  <div style={{ display:"flex", gap:6 }}>
-                    <button onClick={()=>onRestore(o.id)} style={{ background:"none", border:`1px solid ${T.upcoming}50`, borderRadius:6, color:T.upcoming, cursor:"pointer", padding:"4px 10px", fontSize:12 }}>Restore</button>
-                    <button onClick={()=>onDelete(o.id)} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", padding:"4px 10px", fontSize:12 }}>Delete</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  </div>;
-}
+// ── DeliveryView ──────────────────────────────────────────────────────────────
+function DeliveryView({ t, api, onSelectOrder }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [date, setDate] = useState(new Date().toISOString().slice(0,10));
 
-/* ─── Login Screen ─── */
-function LoginScreen() {
-  const [loading, setLoading] = useState(false);
+  useEffect(()=>{
+    api.get('orders').then(r=>{ if(Array.isArray(r)) setOrders(r); setLoading(false); }).catch(()=>setLoading(false));
+  },[]);
 
-  const signInWithGoogle = () => {
-    window.location.href = "https://possible-peacock-8.accounts.dev/sign-in?redirect_url=" + encodeURIComponent(window.location.origin);
-  };
+  const forDate = orders
+    .filter(o=>o.status==='confirmed' && o.deliveryDates?.some(d=>d.date===date))
+    .sort((a,b)=>{
+      const slotOrder = {morning:0,afternoon:1,evening:2};
+      const aSlot = a.deliveryDates.find(d=>d.date===date)?.slot||'morning';
+      const bSlot = b.deliveryDates.find(d=>d.date===date)?.slot||'morning';
+      return slotOrder[aSlot]-slotOrder[bSlot];
+    });
 
   return (
-    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
-      <div style={{ textAlign:"center", padding:40 }}>
-        <div style={{ fontSize:32, fontWeight:700, color:T.text, marginBottom:8, letterSpacing:"-0.5px" }}>
-          Sales<span style={{ color:T.gold }}>Desk</span>
-        </div>
-        <div style={{ fontSize:13, color:T.muted, marginBottom:40 }}>AI-Powered Sales File Manager</div>
-        <button onClick={signInWithGoogle} disabled={loading}
-          style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 28px", borderRadius:12,
-            background:"white", border:"none", cursor:loading?"not-allowed":"pointer", fontSize:15,
-            fontWeight:600, color:"#333", fontFamily:T.font, opacity:loading?0.7:1, margin:"0 auto",
-            boxShadow:"0 2px 12px rgba(0,0,0,0.3)" }}>
-          <svg width="20" height="20" viewBox="0 0 48 48">
-            <path fill="#FFC107" d="M43.6 20H24v8h11.3C33.7 33.3 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34.1 6.5 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20c11 0 20-8 20-20 0-1.3-.1-2.7-.4-4z"/>
-            <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 19 13 24 13c3 0 5.8 1.1 7.9 3l5.7-5.7C34.1 6.5 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
-            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5l-6.2-5.2C29.5 35.5 26.9 36 24 36c-5.2 0-9.7-2.7-11.3-7.1l-6.6 5.1C9.5 39.6 16.3 44 24 44z"/>
-            <path fill="#1976D2" d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C41 35.2 44 30 44 24c0-1.3-.1-2.7-.4-4z"/>
-          </svg>
-          {loading ? "Signing in…" : "Sign in with Google"}
-        </button>
+    <div>
+      <h2 style={{fontWeight:800,marginBottom:20}}>{t('deliverySchedule')}</h2>
+      <div style={{marginBottom:16}}>
+        <label style={S.label}>{t('date')}</label>
+        <input type="date" style={{...S.input,maxWidth:200}} value={date} onChange={e=>setDate(e.target.value)} />
       </div>
+      {loading && <div style={{color:'#aaa',padding:24}}>{t('loading')}</div>}
+      {!loading && forDate.length===0 && <div style={{color:'#aaa',padding:24}}>{t('noResults')}</div>}
+      {forDate.map(o=>{
+        const slot = o.deliveryDates.find(d=>d.date===date);
+        return (
+          <div key={o.id} style={{...S.card,cursor:'pointer'}} onClick={()=>onSelectOrder(o)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+              <div>
+                <div style={{fontWeight:700}}>{o.client1?.name}</div>
+                <div style={{fontSize:13,color:'#555'}}>{o.address}, {o.city} {o.postalCode}</div>
+                <div style={{fontSize:12,color:'#888'}}>{o.client1?.phone}</div>
+                <div style={{marginTop:6}}><span style={S.badge('#2563eb')}>{t(slot?.slot||'morning')}</span></div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontWeight:700,color:'#C41E1E'}}>{fmt$(o.totals?.total||0)}</div>
+                <div style={{fontSize:12,color:'#888',marginTop:4}}>{t('paymentMethod')}: {o.paymentMethod==='lendcare'?t('lendcare'):t('cashDoor')}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-/* ─── Main App ─── */
-const TABS = ["Upload","All Orders","Weekly","Monthly","Yearly","Clients","Deliveries","Cancelled"];
+// ── Profile ───────────────────────────────────────────────────────────────────
+function Profile({ t, api, me, onUpdated }) {
+  const [sig, setSig] = useState(me.savedSignature);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState('');
 
-export default function SalesDesk() {
-  const [user, setUser]               = useState(undefined); // undefined = loading
-  const [token, setToken]             = useState(null);
-  const [orders, setOrders]           = useState([]);
-  const [tab, setTab]                 = useState("Upload");
-  const [uploadFiles, setUploadFiles] = useState([]);
-  const [loading, setLoading]         = useState(true);
-  const [isAdmin, setIsAdmin]         = useState(false);
-  const [employees, setEmployees]     = useState([]);
-  const [viewingUser, setViewingUser] = useState(null);
+  async function saveSig(data) {
+    setSaving(true);
+    await api.post('signature', { signatureData: data });
+    setSig(data); setSaving(false);
+    setToast(t('savedSignature')+' ✓');
+    onUpdated({ ...me, savedSignature: data });
+  }
 
-  // Init Clerk auth
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const clerk = await getClerk();
-        const update = async () => {
-          const u = clerk.user;
-          setUser(u || null);
-          if (u && clerk.session) {
-            try {
-              const t = await clerk.session.getToken();
-              setToken(t);
-            } catch(e) {
-              console.error("token error:", e);
-              setToken(null);
-            }
-          } else {
-            setToken(null);
-          }
-        };
-        // Wait a tick for session to be ready before first update
-        setTimeout(update, 500);
-        clerk.addListener(update);
-      } catch(err) {
-        console.error("Clerk init error:", err);
-        setUser(null); // show login screen on error
-      }
-    };
-    init();
-  }, []);
-
-  const authFetch = useCallback((url, opts = {}) => {
-    return fetch(url, {
-      ...opts,
-      headers: { "Content-Type":"application/json", "Authorization":`Bearer ${token}`, ...(opts.headers||{}) }
-    });
-  }, [token]);
-
-  // Check admin status
-  useEffect(() => {
-    if (!token) return;
-    authFetch("/api/me")
-      .then(r => r.json())
-      .then(d => setIsAdmin(d.isAdmin || false))
-      .catch(() => {});
-  }, [token]);
-
-  // Load employees (admin only)
-  useEffect(() => {
-    if (!isAdmin || !token) return;
-    authFetch("/api/orders", { method:"PUT" })
-      .then(r => r.json())
-      .then(d => setEmployees(d.users || []))
-      .catch(() => {});
-  }, [isAdmin, token]);
-
-  // Load orders when user or viewingUser changes
-  useEffect(() => {
-    if (!token) return;
-    setLoading(true);
-    const url = isAdmin && viewingUser ? `/api/orders?userId=${viewingUser.id}` : "/api/orders";
-    authFetch(url)
-      .then(r => r.json())
-      .then(d => setOrders(Array.isArray(d.orders) ? d.orders : []))
-      .catch(() => setOrders([]))
-      .finally(() => setLoading(false));
-  }, [token, viewingUser]);
-
-  // Save orders
-  useEffect(() => {
-    if (loading || !token) return;
-    const body = isAdmin && viewingUser ? { orders, userId: viewingUser.id } : { orders };
-    authFetch("/api/orders", { method:"POST", body: JSON.stringify(body) }).catch(() => {});
-  }, [orders, loading, token]);
-
-  const addOrder     = useCallback(o  => setOrders(prev=>[...prev, o]), []);
-  const deleteOrder  = useCallback(id => setOrders(prev=>prev.filter(o=>o.id!==id)), []);
-  const cancelOrder  = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o,cancelled:true}  : o)), []);
-  const restoreOrder = useCallback(id => setOrders(prev=>prev.map(o=>o.id===id ? {...o,cancelled:false} : o)), []);
-
-  const activeOrders    = useMemo(()=>orders.filter(o=>!o.cancelled),  [orders]);
-  const cancelledOrders = useMemo(()=>orders.filter(o=>o.cancelled),   [orders]);
-
-  const signOut = async () => {
-    const clerk = await getClerk();
-    await clerk.signOut();
-  };
-
-  // Auth loading
-  if (user === undefined) return (
-    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
-      <div style={{ fontSize:13, color:T.muted }}>Loading…</div>
+  return (
+    <div>
+      <h2 style={{fontWeight:800,marginBottom:20}}>{t('profile')}</h2>
+      <div style={S.card}>
+        <div style={{marginBottom:12}}>
+          <strong>{me.firstName} {me.lastName}</strong><br/>
+          <span style={{color:'#888'}}>{me.email}</span><br/>
+          <span style={S.badge('#C41E1E')}>{t('role'+me.role?.charAt(0).toUpperCase()+me.role?.slice(1)||'')}</span>
+        </div>
+        <div style={S.sectionTitle}>{t('savedSignature')}</div>
+        {sig
+          ? <div><img src={sig} style={{width:'100%',maxWidth:400,maxHeight:150,objectFit:'contain',border:'1.5px solid #eee',borderRadius:8,marginBottom:10}} /><button style={S.btn('ghost')} onClick={()=>setSig(null)}>{t('updateSignature')}</button></div>
+          : <SignaturePad onSave={saveSig} onClear={()=>setSig(null)} />
+        }
+        {saving && <div style={{color:'#888',marginTop:8}}>{t('loading')}</div>}
+      </div>
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
     </div>
   );
+}
 
-  if (!user) return <LoginScreen/>;
+// ── Auth / Clerk integration ──────────────────────────────────────────────────
+// We use Clerk's hosted sign-in page and capture the token from the URL/__clerk_db_jwt
+function useClerk() {
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const api = useAPI();
+
+  useEffect(()=>{
+    // Check for token in URL params (magic link)
+    const params = new URLSearchParams(window.location.search);
+    const ticket = params.get('__clerk_ticket');
+    if (ticket) {
+      // Exchange ticket for session — redirect to Clerk hosted
+      window.location.href = `https://possible-peacock-8.accounts.dev/sign-in?__clerk_ticket=${ticket}&redirect_url=${encodeURIComponent(APP_URL)}`;
+      return;
+    }
+
+    // Try to get existing session token from Clerk's JS
+    loadClerkAndGetToken();
+  },[]);
+
+  async function loadClerkAndGetToken() {
+    if (!window.Clerk) {
+      // Load Clerk JS
+      const script = document.createElement('script');
+      script.src = `https://possible-peacock-8.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
+      script.setAttribute('data-clerk-publishable-key', import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+      document.head.appendChild(script);
+      script.onload = async () => { await initClerk(); };
+      script.onerror = () => setLoading(false);
+    } else {
+      await initClerk();
+    }
+  }
+
+  async function initClerk() {
+    try {
+      await window.Clerk.load({ appearance: { variables: { colorPrimary: '#C41E1E' } } });
+      const session = window.Clerk.session;
+      if (!session) { setLoading(false); return; }
+      const token = await session.getToken();
+      if (token) {
+        localStorage.setItem('ap_token', token);
+        const meData = await api.get('me');
+        if (!meData.error) setMe(meData);
+      }
+    } catch(e) { console.error('Clerk init error', e); }
+    finally { setLoading(false); }
+  }
+
+  async function signOut() {
+    await window.Clerk?.signOut?.();
+    localStorage.removeItem('ap_token');
+    setMe(null);
+  }
+
+  return { me, setMe, loading, signOut };
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [lang, setLang] = useState('fr');
+  const t = useT(lang);
+  const { me, setMe, loading, signOut } = useClerk();
+  const api = useAPI();
+  const [view, setView] = useState('orders'); // orders|form|detail|dashboard|delivery|profile
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [editOrder, setEditOrder] = useState(null);
+  const [toast, setToast] = useState('');
+
+  // Redirect to sign-in if not authenticated
+  function goSignIn() {
+    const redirect = encodeURIComponent(APP_URL);
+    window.location.href = `https://possible-peacock-8.accounts.dev/sign-in?redirect_url=${redirect}`;
+  }
+
+  function selectOrder(order) { setSelectedOrder(order); setView('detail'); }
+
+  function handleOrderSaved(order) {
+    setToast(t('save') + ' ✓');
+    setView('orders');
+  }
+
+  // Determine default view per role
+  useEffect(()=>{
+    if (!me) return;
+    if (me.role==='delivery') setView('delivery');
+    else if (me.role==='manager') setView('dashboard');
+    else if (me.role==='client') setView('orders');
+    else setView('orders');
+  },[me?.userId]);
+
+  // Nav items per role
+  function navItems() {
+    if (!me) return [];
+    const items = [];
+    if (['rep','client_service','manager','client'].includes(me.role)) items.push({key:'orders',label:t('myOrders')});
+    if (['manager','rep'].includes(me.role)) items.push({key:'dashboard',label:t('dashboard')});
+    if (me.role==='delivery') items.push({key:'delivery',label:t('deliverySchedule')});
+    items.push({key:'profile',label:t('profile')});
+    return items;
+  }
 
   if (loading) return (
-    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:T.font }}>
-      <div style={{ textAlign:"center" }}>
-        <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:8 }}>Sales<span style={{ color:T.gold }}>Desk</span></div>
-        <div style={{ fontSize:13, color:T.muted }}>Loading orders…</div>
+    <div style={{...S.app,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}>
+      <div style={{textAlign:'center'}}>
+        <div style={{fontSize:32,marginBottom:8}}>🥩</div>
+        <div style={{fontWeight:700,color:'#C41E1E',fontSize:18}}>Alimentation Première</div>
+        <div style={{color:'#aaa',marginTop:8}}>{t('loading')}</div>
       </div>
     </div>
   );
 
-  const displayName = viewingUser?.name || user.firstName || user.emailAddresses?.[0]?.emailAddress || "You";
-
   return (
-    <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.font, color:T.text, padding:"24px 28px" }}>
+    <div style={S.app}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
       {/* Header */}
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
-        <div>
-          <div style={{ fontSize:24, fontWeight:700, color:T.text, letterSpacing:"-0.5px" }}>
-            Sales<span style={{ color:T.gold }}>Desk</span>
-          </div>
-          <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>AI-Powered Sales File Manager</div>
-        </div>
-        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          {isAdmin && (
-            <select value={viewingUser?.id || ""}
-              onChange={e => {
-                const emp = employees.find(u => u.id === e.target.value);
-                setViewingUser(emp || null);
-                setOrders([]);
-                setTab("Upload");
-              }}
-              style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${T.border}`,
-                background:T.card, color:T.text, fontSize:13, fontFamily:T.font, cursor:"pointer" }}>
-              <option value="">👤 My Orders</option>
-              {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
-            </select>
-          )}
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            {user.imageUrl && <img src={user.imageUrl} style={{ width:28, height:28, borderRadius:"50%", border:`1px solid ${T.border}` }} />}
-            <span style={{ fontSize:12, color:T.muted }}>{displayName}</span>
-          </div>
-          <button onClick={signOut}
-            style={{ padding:"6px 14px", borderRadius:8, border:`1px solid ${T.border}`,
-              background:"none", color:T.muted, cursor:"pointer", fontSize:12, fontFamily:T.font }}>
-            Sign out
+      <header style={S.header}>
+        <div style={S.logo}>🥩 Alimentation Première</div>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          {me && navItems().map(n=>(
+            <button key={n.key} style={S.navBtn(view===n.key)} onClick={()=>{setView(n.key);setSelectedOrder(null);}}>
+              {n.label}
+            </button>
+          ))}
+          <button style={{...S.btn('ghost'),background:'rgba(255,255,255,.15)',color:'#fff',border:'1.5px solid rgba(255,255,255,.3)',fontSize:12,padding:'4px 10px'}} onClick={()=>setLang(lang==='fr'?'en':'fr')}>
+            {lang==='fr'?'EN':'FR'}
           </button>
+          {me
+            ? <button style={{...S.btn('ghost'),background:'rgba(255,255,255,.15)',color:'#fff',border:'1.5px solid rgba(255,255,255,.3)',fontSize:12,padding:'4px 10px'}} onClick={signOut}>{t('signOut')}</button>
+            : <button style={{...S.btn('ghost'),background:'rgba(255,255,255,.15)',color:'#fff',border:'1.5px solid rgba(255,255,255,.3)',fontSize:12,padding:'4px 10px'}} onClick={goSignIn}>{t('signIn')}</button>
+          }
         </div>
-      </div>
+      </header>
 
-      {/* Stats */}
-      <StatsBar orders={orders} activeOrders={activeOrders}/>
+      <main style={S.main}>
+        {!me && (
+          <div style={{...S.card,textAlign:'center',padding:48}}>
+            <div style={{fontSize:48,marginBottom:12}}>🥩</div>
+            <h2 style={{color:'#C41E1E',fontWeight:800}}>Alimentation Première</h2>
+            <p style={{color:'#555',marginBottom:24}}>Plateforme de gestion des ventes</p>
+            <button style={{...S.btn(),fontSize:16,padding:'12px 32px'}} onClick={goSignIn}>{t('signIn')} →</button>
+          </div>
+        )}
 
-      {/* Tab Switcher */}
-      <div style={{ display:"flex", gap:6, marginBottom:24, flexWrap:"wrap" }}>
-        {TABS.map(t=>(
-          <button key={t} onClick={()=>setTab(t)}
-            style={{ padding:"8px 18px", borderRadius:20, border:`1px solid ${tab===t ? T.gold : T.border}`, background: tab===t ? `${T.gold}20` : T.card, color: tab===t ? T.gold : T.muted, cursor:"pointer", fontFamily:T.font, fontSize:13, fontWeight:tab===t?600:400, transition:"all .15s" }}>
-            {t}
-          </button>
-        ))}
-      </div>
+        {me && view==='orders' && (
+          <OrdersList t={t} api={api} me={me}
+            onSelectOrder={selectOrder}
+            onNewOrder={()=>{setEditOrder(null);setView('form');}} />
+        )}
 
-      {/* Tab Content */}
-      {tab==="Upload"     && <UploadTab onOrdersAdded={addOrder} files={uploadFiles} setFiles={setUploadFiles}/>}
-      {tab==="All Orders" && <AllOrdersTab orders={activeOrders} onDelete={deleteOrder}/>}
-      {tab==="Weekly"     && <PeriodTab orders={orders} mode="weekly"/>}
-      {tab==="Monthly"    && <PeriodTab orders={orders} mode="monthly"/>}
-      {tab==="Yearly"     && <PeriodTab orders={orders} mode="yearly"/>}
-      {tab==="Clients"    && <ClientsTab orders={activeOrders}/>}
-      {tab==="Deliveries" && <DeliveriesTab orders={activeOrders} onCancel={cancelOrder}/>}
-      {tab==="Cancelled"  && <CancelledTab orders={cancelledOrders} onRestore={restoreOrder} onDelete={deleteOrder}/>}
+        {me && view==='form' && (
+          <OrderForm t={t} api={api} me={me} existing={editOrder}
+            onSaved={handleOrderSaved}
+            onCancel={()=>setView('orders')} />
+        )}
+
+        {me && view==='detail' && selectedOrder && (
+          <OrderDetail order={selectedOrder} t={t} me={me} api={api}
+            onBack={()=>setView('orders')}
+            onUpdated={(updated)=>{
+              setSelectedOrder(updated);
+              setToast('Mis à jour ✓');
+            }} />
+        )}
+
+        {me && view==='dashboard' && <Dashboard t={t} api={api} me={me} />}
+        {me && view==='delivery' && <DeliveryView t={t} api={api} onSelectOrder={selectOrder} />}
+        {me && view==='profile' && <Profile t={t} api={api} me={me} onUpdated={setMe} />}
+      </main>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
     </div>
   );
 }

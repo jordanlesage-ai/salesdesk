@@ -10,9 +10,9 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "xlsx": "^0.18.5",
     "@upstash/redis": "^1.28.0",
-    "@clerk/backend": "^1.0.0"
+    "@clerk/backend": "^1.0.0",
+    "resend": "^3.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",
