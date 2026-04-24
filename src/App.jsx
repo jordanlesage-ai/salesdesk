@@ -666,7 +666,7 @@ function Dashboard({ t, api, me }) {
                   <td style={S.td}>{rep.orders.length}</td>
                   <td style={S.td}>{rep.delivered}</td>
                   <td style={S.td}>{fmt$(rep.sales)}</td>
-                  <td style={S.td} style={{color:'#d97706',fontWeight:700}}>{fmt$(rep.sales*COMMISSION_RATE)}</td>
+                  <td style={{...S.td,color:'#d97706',fontWeight:700}}>{fmt$(rep.sales*COMMISSION_RATE)}</td>
                 </tr>
               ))}
             </tbody>
