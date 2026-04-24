@@ -801,7 +801,6 @@ function useClerk() {
       await initClerk();
     }
   }
-  }
 
   async function initClerk() {
     try {
