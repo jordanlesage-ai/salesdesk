@@ -125,13 +125,16 @@ function SignaturePad({ onSave, onClear, existingData, readOnly }) {
 
 // -- useAPI --------------------------------------------------------------------
 function useAPI() {
-  const token = () => localStorage.getItem('ap_token') || '';
-  const headers = () => ({ 'Authorization':`Bearer ${token()}`, 'Content-Type':'application/json' });
+  const getToken = async () => {
+    try { if (window.Clerk?.session) return await window.Clerk.session.getToken() || ''; } catch {}
+    return localStorage.getItem('ap_token') || '';
+  };
+  const hdrs = async () => ({ 'Authorization': `Bearer ${await getToken()}`, 'Content-Type': 'application/json' });
   return {
-    get: (path) => fetch(API(path), { headers: headers() }).then(r => r.json()),
-    post: (path, body) => fetch(API(path), { method:'POST', headers: headers(), body: JSON.stringify(body) }).then(r => r.json()),
-    put: (path, body) => fetch(API(path), { method:'PUT', headers: headers(), body: JSON.stringify(body) }).then(r => r.json()),
-    patch: (path, body) => fetch(API(path), { method:'PATCH', headers: headers(), body: JSON.stringify(body) }).then(r => r.json()),
+    get:   async (path)       => fetch(API(path), { headers: await hdrs() }).then(r => r.json()),
+    post:  async (path, body) => fetch(API(path), { method:'POST',  headers: await hdrs(), body: JSON.stringify(body) }).then(r => r.json()),
+    put:   async (path, body) => fetch(API(path), { method:'PUT',   headers: await hdrs(), body: JSON.stringify(body) }).then(r => r.json()),
+    patch: async (path, body) => fetch(API(path), { method:'PATCH', headers: await hdrs(), body: JSON.stringify(body) }).then(r => r.json()),
   };
 }
 
