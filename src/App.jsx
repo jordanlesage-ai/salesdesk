@@ -843,7 +843,7 @@ export default function App() {
   // Redirect to sign-in if not authenticated
   function goSignIn() {
     const redirect = encodeURIComponent(APP_URL);
-    window.location.href = `https://accounts.clerk.dev/sign-in?redirect_url=${redirect}`;
+    window.location.href = `https://possible-peacock-8.accounts.dev/sign-in?redirect_url=${redirect}`;
   }
 
   function selectOrder(order) { setSelectedOrder(order); setView('detail'); }
