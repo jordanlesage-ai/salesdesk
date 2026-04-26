@@ -1,7 +1,7 @@
 import { Redis } from '@upstash/redis';
 import { verifyAuth } from './me.js';
 
-const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+const redis = Redis.fromEnv();
 const DEFAULT_SLOTS = 20;
 
 export default async function handler(req, res) {

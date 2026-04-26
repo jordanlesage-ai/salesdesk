@@ -2,7 +2,7 @@ import { Redis } from '@upstash/redis';
 import { createClerkClient } from '@clerk/backend';
 import { verifyAuth } from './me.js';
 
-const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+const redis = Redis.fromEnv();
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 function orderId() {
