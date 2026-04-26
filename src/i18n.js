@@ -42,7 +42,7 @@ export const translations = {
     noSavedSignature:'Aucune signature',drawSignature:'Dessiner votre signature',
     errorLoading:'Erreur de chargement',errorSaving:'Erreur de sauvegarde',
     errorUnauthorized:'Non autorisé',tryAgain:'Réessayer',
-    ordersCount:'Commandes',delivered:'Livrées',cancelled:'Annulées',
+    ordersCount:'Commandes',delivered:'Livrées',cancelled:'Annulées',monExcel:'Mon Excel',importExcel:'Importer Excel',noExcelData:'Aucune donnée Excel',excelSave:'Enregistrer',excelSaved:'Enregistré',
   },
   en: {
     appName:'Alimentation Première',signOut:'Sign Out',signIn:'Sign In',loading:'Loading…',
@@ -87,7 +87,7 @@ export const translations = {
     noSavedSignature:'No signature saved',drawSignature:'Draw your signature',
     errorLoading:'Loading error',errorSaving:'Save error',
     errorUnauthorized:'Unauthorized',tryAgain:'Try again',
-    ordersCount:'Orders',delivered:'Delivered',cancelled:'Cancelled',
+    ordersCount:'Orders',delivered:'Delivered',cancelled:'Cancelled',monExcel:'My Excel',importExcel:'Import Excel',noExcelData:'No Excel data',excelSave:'Save',excelSaved:'Saved',
   }
 };
 export function useT(lang='fr'){return(key)=>translations[lang]?.[key]??translations.fr?.[key]??key;}

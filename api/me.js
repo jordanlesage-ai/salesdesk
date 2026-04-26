@@ -27,6 +27,7 @@ export async function verifyAuth(req) {
     role: user.publicMetadata?.role || null,
     savedSignature: user.publicMetadata?.savedSignature || null,
     orders: user.publicMetadata?.orders || [],
+    isManager: user.id === process.env.ADMIN_USER_ID,
   };
 }
 

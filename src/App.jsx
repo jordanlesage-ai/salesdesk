@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { useT } from './i18n.js';
 import { PRODUCTS, CATEGORIES } from './products.js';
 
@@ -730,6 +731,97 @@ function DeliveryView({ t, api, onSelectOrder }) {
   );
 }
 
+
+// -- ExcelView ----------------------------------------------------------------
+function ExcelView({ t, api, me }) {
+  const [data, setData] = useState({ headers: [], rows: [] });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.get('excel').then(d => { if (d?.headers) setData(d); setLoading(false); }).catch(() => setLoading(false));
+  }, []);
+
+  async function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (!raw.length) return;
+    const headers = raw[0].map(String);
+    const rows = raw.slice(1).map(r => headers.map((_, i) => String(r[i] ?? '')));
+    const next = { headers, rows };
+    setData(next);
+    await doSave(next);
+    e.target.value = '';
+  }
+
+  async function doSave(d) {
+    setSaving(true);
+    await api.post('excel', d || data);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  function updateCell(ri, ci, val) {
+    setData(prev => ({ ...prev, rows: prev.rows.map((r, i) => i === ri ? r.map((c, j) => j === ci ? val : c) : r) }));
+  }
+
+  if (loading) return <div style={{padding:40,textAlign:'center',color:'#888'}}>{t('loading')}</div>;
+
+  return (
+    <div style={S.card}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20,flexWrap:'wrap'}}>
+        <h2 style={{margin:0,fontWeight:800}}>{t('monExcel')}</h2>
+        {me.isManager && (
+          <label style={{...S.btn(),cursor:'pointer',fontSize:13,padding:'6px 14px'}}>
+            {t('importExcel')}
+            <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={handleFile} />
+          </label>
+        )}
+        {data.rows.length > 0 && (
+          <button style={S.btn()} onClick={() => doSave()} disabled={saving}>
+            {saving ? '…' : saved ? t('excelSaved') : t('excelSave')}
+          </button>
+        )}
+      </div>
+      {!data.headers.length
+        ? <p style={{color:'#888'}}>{t('noExcelData')}</p>
+        : (
+          <div style={{overflowX:'auto'}}>
+            <table style={S.table}>
+              <thead>
+                <tr>{data.headers.map((h, i) => (
+                  <th key={i} style={{background:'#f5f5f5',fontWeight:700,padding:'6px 10px',textAlign:'left',whiteSpace:'nowrap',borderBottom:'2px solid #e0e0e0'}}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row, ri) => (
+                  <tr key={ri}>
+                    {row.map((cell, ci) => (
+                      <td key={ci} style={{padding:'2px 4px',borderBottom:'1px solid #eee'}}>
+                        <input
+                          style={{border:'none',background:'transparent',width:'100%',fontFamily:"'DM Sans',sans-serif",fontSize:13,padding:'4px 6px',outline:'none'}}
+                          value={cell}
+                          onChange={e => updateCell(ri, ci, e.target.value)}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
 // -- Profile -------------------------------------------------------------------
 function Profile({ t, api, me, onUpdated }) {
   const [sig, setSig] = useState(me.savedSignature);
@@ -834,7 +926,7 @@ export default function App() {
   const t = useT(lang);
   const { me, setMe, loading, signOut } = useClerk();
   const api = useAPI();
-  const [view, setView] = useState('orders'); // orders|form|detail|dashboard|delivery|profile
+  const [view, setView] = useState('orders'); // orders|form|detail|dashboard|delivery|profile|excel
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [editOrder, setEditOrder] = useState(null);
   const [toast, setToast] = useState('');
@@ -868,6 +960,7 @@ export default function App() {
     if (['rep','client_service','manager','client'].includes(me.role)) items.push({key:'orders',label:t('myOrders')});
     if (['manager','rep'].includes(me.role)) items.push({key:'dashboard',label:t('dashboard')});
     if (me.role==='delivery') items.push({key:'delivery',label:t('deliverySchedule')});
+    if (['rep','client_service','manager'].includes(me.role)) items.push({key:'excel',label:t('monExcel')});
     items.push({key:'profile',label:t('profile')});
     return items;
   }
@@ -938,6 +1031,7 @@ export default function App() {
 
         {me && view==='dashboard' && <Dashboard t={t} api={api} me={me} />}
         {me && view==='delivery' && <DeliveryView t={t} api={api} onSelectOrder={selectOrder} />}
+        {me && view==='excel' && <ExcelView t={t} api={api} me={me} />}
         {me && view==='profile' && <Profile t={t} api={api} me={me} onUpdated={setMe} />}
       </main>
 
