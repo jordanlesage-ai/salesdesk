@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useUser, useAuth, useClerk as useClerkHook, SignInButton } from '@clerk/clerk-react';
 import { useT } from './i18n.js';
 import { PRODUCTS, CATEGORIES } from './products.js';
 
@@ -794,7 +793,7 @@ function useClerk() {
       // Derive frontend API from publishable key: pk_live_xxx -> xxx.clerk.accounts.dev
       const domain = pk.replace(/^pk_(live|test)_/, '');
       let frontendApi = '';
-      try { frontendApi = atob(domain); } catch(e) { frontendApi = 'clerk.accounts.dev'; }
+      try { frontendApi = atob(domain).replace(/[^a-z0-9.-]/gi, ''); } catch(e) { frontendApi = 'clerk.accounts.dev'; }
       script.src = `https://${frontendApi}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
       script.setAttribute('data-clerk-publishable-key', pk);
       document.head.appendChild(script);
