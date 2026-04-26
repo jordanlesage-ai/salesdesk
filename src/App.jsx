@@ -257,183 +257,6 @@ function DeliveryDatePicker({ dates, onChange, t, api }) {
   );
 }
 
-// -- OrderForm -----------------------------------------------------------------
-function OrderForm({ t, api, me, onSaved, onCancel, existing }) {
-  const blank = { client1:{name:'',phone:'',email:''}, client2:{name:'',phone:'',email:''}, address:'', city:'', postalCode:'', repName:`${me.firstName} ${me.lastName}`.trim(), repOfficePhone:'', repEmail:me.email, referredBy:'', items:[], deliveryDates:[], paymentMethod:'cash', notes:'' };
-  const [form, setForm] = useState(existing ? { ...blank, ...existing } : blank);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [clientSigMode, setClientSigMode] = useState('inperson'); // inperson|remote|docusign
-  const [repSig, setRepSig] = useState(me.savedSignature || null);
-  const [clientSig, setClientSig] = useState(existing?.signatures?.client?.data || null);
-
-  const totals = calcTotals(form.items);
-
-  function setField(path, val) {
-    setForm(prev => {
-      const next = { ...prev };
-      const parts = path.split('.');
-      let obj = next;
-      for (let i=0; i<parts.length-1; i++) { obj[parts[i]] = {...obj[parts[i]]}; obj = obj[parts[i]]; }
-      obj[parts[parts.length-1]] = val;
-      return next;
-    });
-  }
-
-  async function save(status = 'draft') {
-    setSaving(true); setError('');
-    try {
-      const payload = {
-        ...form,
-        status,
-        totals,
-        signatures: { rep: repSig ? { data: repSig } : null, client: clientSig ? { data: clientSig } : null },
-        clientSignatureMode: clientSigMode,
-      };
-      let order;
-      if (existing?.id) {
-        order = await api.put(`orders?id=${existing.id}`, payload);
-      } else {
-        order = await api.post('orders', payload);
-      }
-      if (order.error) { setError(order.error); return; }
-
-      // If both signed - send invite/confirmation email
-      if (repSig && (clientSig || clientSigMode === 'docusign') && order.id) {
-        const firstDate = form.deliveryDates[0];
-        await api.post('invite', {
-          orderId: order.id,
-          clientEmail: form.client1.email,
-          clientName: form.client1.name,
-          orderTotal: totals.total,
-          firstDeliveryDate: firstDate ? `${firstDate.date} (${t(firstDate.slot)})` : '',
-        });
-      }
-
-      onSaved(order);
-    } catch(e) { setError(e.message); }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div>
-      <h2 style={S.sectionTitle}>{existing ? t('editOrder') : t('newOrder')}</h2>
-
-      {/* Clients */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('client1')}</div>
-        <div style={S.row}>
-          <div style={S.col()}><label style={S.label}>{t('clientName')}</label><input style={S.input} value={form.client1.name} onChange={e=>setField('client1.name',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('clientPhone')}</label><input style={S.input} value={form.client1.phone} onChange={e=>setField('client1.phone',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('clientEmail')}</label><input type="email" style={S.input} value={form.client1.email} onChange={e=>setField('client1.email',e.target.value)} /></div>
-        </div>
-      </div>
-
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('client2')}</div>
-        <div style={S.row}>
-          <div style={S.col()}><label style={S.label}>{t('clientName')}</label><input style={S.input} value={form.client2.name} onChange={e=>setField('client2.name',e.target.value)} placeholder={t('optional')} /></div>
-          <div style={S.col()}><label style={S.label}>{t('clientPhone')}</label><input style={S.input} value={form.client2.phone} onChange={e=>setField('client2.phone',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('clientEmail')}</label><input type="email" style={S.input} value={form.client2.email} onChange={e=>setField('client2.email',e.target.value)} /></div>
-        </div>
-      </div>
-
-      {/* Address */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('address')}</div>
-        <div style={S.row}>
-          <div style={{flex:3}}><label style={S.label}>{t('address')}</label><input style={S.input} value={form.address} onChange={e=>setField('address',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('city')}</label><input style={S.input} value={form.city} onChange={e=>setField('city',e.target.value)} /></div>
-          <div style={{flex:0.7}}><label style={S.label}>{t('postalCode')}</label><input style={S.input} value={form.postalCode} onChange={e=>setField('postalCode',e.target.value)} /></div>
-        </div>
-      </div>
-
-      {/* Rep info */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('repName')}</div>
-        <div style={S.row}>
-          <div style={S.col()}><label style={S.label}>{t('repName')}</label><input style={S.input} value={form.repName} onChange={e=>setField('repName',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('repOfficePhone')}</label><input style={S.input} value={form.repOfficePhone} onChange={e=>setField('repOfficePhone',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('repEmail')}</label><input type="email" style={S.input} value={form.repEmail} onChange={e=>setField('repEmail',e.target.value)} /></div>
-          <div style={S.col()}><label style={S.label}>{t('referredBy')}</label><input style={S.input} value={form.referredBy} onChange={e=>setField('referredBy',e.target.value)} /></div>
-        </div>
-      </div>
-
-      {/* Products */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('products')}</div>
-        <ProductPicker items={form.items} onChange={items=>setField('items',items)} t={t} />
-        {form.items.length > 0 && (
-          <div style={{marginTop:16,borderTop:'2px solid #eee',paddingTop:14,textAlign:'right'}}>
-            <div style={{marginBottom:4,color:'#555'}}>{t('subtotal')}: <strong>{fmt$(totals.subtotal)}</strong></div>
-            <div style={{marginBottom:4,color:'#555'}}>{t('tps')}: <strong>{fmt$(totals.tps)}</strong></div>
-            <div style={{marginBottom:8,color:'#555'}}>{t('tvq')}: <strong>{fmt$(totals.tvq)}</strong></div>
-            <div style={{fontSize:18,fontWeight:800,color:'#C41E1E'}}>{t('totalTaxes')}: {fmt$(totals.total)}</div>
-          </div>
-        )}
-      </div>
-
-      {/* Delivery dates */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('deliveryDates')}</div>
-        <DeliveryDatePicker dates={form.deliveryDates} onChange={v=>setField('deliveryDates',v)} t={t} api={api} />
-      </div>
-
-      {/* Payment */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('paymentMethod')}</div>
-        <div style={S.row}>
-          {['cash','lendcare'].map(m=>(
-            <label key={m} style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'10px 16px',borderRadius:8,border:`2px solid ${form.paymentMethod===m?'#C41E1E':'#eee'}`,flex:1}}>
-              <input type="radio" name="payment" value={m} checked={form.paymentMethod===m} onChange={()=>setField('paymentMethod',m)} />
-              {m==='cash'?t('cashDoor'):t('lendcare')}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* Signatures */}
-      <div style={S.card}>
-        <div style={S.sectionTitle}>{t('signatures')}</div>
-        <div style={S.row}>
-          {/* Rep signature */}
-          <div style={S.col()}>
-            <label style={S.label}>{t('repSignature')}</label>
-            {repSig
-              ? <div><img src={repSig} style={{width:'100%',maxHeight:150,objectFit:'contain',border:'1.5px solid #eee',borderRadius:8}} /><button style={{...S.btn('ghost'),marginTop:8,fontSize:12}} onClick={()=>setRepSig(null)}>Changer</button></div>
-              : <SignaturePad onSave={setRepSig} onClear={()=>setRepSig(null)} />
-            }
-          </div>
-          {/* Client signature */}
-          <div style={S.col()}>
-            <label style={S.label}>{t('clientSignature')}</label>
-            <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap'}}>
-              {['inperson','remote','docusign'].map(m=>(
-                <button key={m} style={{...S.btn(clientSigMode===m?'primary':'ghost'),fontSize:12,padding:'5px 10px'}} onClick={()=>setClientSigMode(m)}>
-                  {m==='inperson'?t('signInPerson'):m==='remote'?t('signRemote'):t('signDocuSign')}
-                </button>
-              ))}
-            </div>
-            {clientSigMode==='inperson' && <SignaturePad onSave={setClientSig} onClear={()=>setClientSig(null)} existingData={clientSig} />}
-            {clientSigMode==='remote' && <div style={{color:'#555',fontSize:13,padding:'12px 0'}}>{t('sendSignatureEmail')} - {t('signatureLinkSent')}</div>}
-            {clientSigMode==='docusign' && <div style={{...S.badge('#2563eb'),fontSize:13,padding:'8px 14px'}}>{t('docuSignSent')}</div>}
-          </div>
-        </div>
-        <div style={{marginTop:10,fontSize:13,color: repSig && (clientSig||clientSigMode==='docusign') ? '#16a34a':'#888'}}>
-          {repSig && (clientSig||clientSigMode==='docusign') ? '- '+t('bothSigned') : t('awaitingClientSign')}
-        </div>
-      </div>
-
-      {error && <div style={{color:'#dc2626',marginBottom:12}}>{error}</div>}
-      <div style={{display:'flex',gap:12,justifyContent:'flex-end',flexWrap:'wrap'}}>
-        <button style={S.btn('ghost')} onClick={onCancel} disabled={saving}>{t('cancel')}</button>
-        <button style={S.btn('ghost')} onClick={()=>save('draft')} disabled={saving}>{saving?t('loading'):t('statusDraft')}</button>
-        <button style={S.btn()} onClick={()=>save('confirmed')} disabled={saving}>{saving?t('loading'):t('confirm')}</button>
-      </div>
-    </div>
-  );
-}
-
 // -- OrderDetail ---------------------------------------------------------------
 function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
   const [loading, setLoading] = useState(false);
@@ -553,7 +376,7 @@ function OrderDetail({ order, t, me, api, onBack, onUpdated }) {
 }
 
 // -- OrdersList ----------------------------------------------------------------
-function OrdersList({ t, api, me, onSelectOrder, onNewOrder }) {
+function OrdersList({ t, api, me, onSelectOrder }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -568,7 +391,7 @@ function OrdersList({ t, api, me, onSelectOrder, onNewOrder }) {
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:10}}>
         <h2 style={{margin:0,fontWeight:800}}>{me.role==='rep'?t('myOrders'):t('allOrders')}</h2>
-        {['rep','client_service','manager'].includes(me.role) && <button style={S.btn()} onClick={onNewOrder}>+ {t('newOrder')}</button>}
+
       </div>
 
       <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
@@ -926,9 +749,8 @@ export default function App() {
   const t = useT(lang);
   const { me, setMe, loading, signOut } = useClerk();
   const api = useAPI();
-  const [view, setView] = useState('orders'); // orders|form|detail|dashboard|delivery|profile|excel
+  const [view, setView] = useState('orders'); // orders|detail|dashboard|delivery|profile|excel
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [editOrder, setEditOrder] = useState(null);
   const [toast, setToast] = useState('');
 
   // Redirect to sign-in if not authenticated
@@ -939,10 +761,6 @@ export default function App() {
 
   function selectOrder(order) { setSelectedOrder(order); setView('detail'); }
 
-  function handleOrderSaved(order) {
-    setToast(t('save') + ' -');
-    setView('orders');
-  }
 
   // Determine default view per role
   useEffect(()=>{
@@ -1010,16 +828,8 @@ export default function App() {
 
         {me && view==='orders' && (
           <OrdersList t={t} api={api} me={me}
-            onSelectOrder={selectOrder}
-            onNewOrder={()=>{setEditOrder(null);setView('form');}} />
+            onSelectOrder={selectOrder} />
         )}
-
-        {me && view==='form' && (
-          <OrderForm t={t} api={api} me={me} existing={editOrder}
-            onSaved={handleOrderSaved}
-            onCancel={()=>setView('orders')} />
-        )}
-
         {me && view==='detail' && selectedOrder && (
           <OrderDetail order={selectedOrder} t={t} me={me} api={api}
             onBack={()=>setView('orders')}
