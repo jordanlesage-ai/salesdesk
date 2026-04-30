@@ -454,44 +454,71 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
         attempt++;
         if (attempt < MAX_RETRIES) {
           setFiles(prev => prev.map(e => e.name===name ? {...e, status:"processing", attempts:attempt} : e));
-          await new Promise(res => setTimeout(res, 2000));
+          // Exponential backoff: 1.5s, 3s, 6s
+          const wait = 1500 * Math.pow(2, attempt - 1);
+          await new Promise(res => setTimeout(res, wait));
         } else {
-          setFiles(prev => prev.map(e => e.name===name ? {...e, status:"error", attempts:attempt} : e));
+          // All retries exhausted — save a placeholder order so the file is never lost
+          try {
+            const fallback = {
+              fileName: name,
+              client: name.replace(/_pdf\.pdf$/i, "").replace(/_/g, " "),
+              date: todayStr(),
+              deliveryDate: null,
+              total: 0,
+              items: ["⚠️ Extraction failed — edit manually"],
+            };
+            await onOrderAdded(fallback);
+            setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done"} : e));
+          } catch (saveErr) {
+            setFiles(prev => prev.map(e => e.name===name ? {...e, status:"error", attempts:attempt} : e));
+          }
         }
       }
     }
   }, [onOrderAdded, setFiles]);
 
-  const process = useCallback(async (newFiles) => {
-    // Enqueue every file immediately as "pending" so the whole batch is visible
-    setFiles(prev => {
-      const existing = new Set(prev.map(e => e.name));
-      const additions = newFiles
-        .filter(f => !existing.has(f.name))
-        .map(f => ({ name: f.name, status: "pending", file: f, attempts: 0 }));
-      return [...prev, ...additions];
-    });
+  // App-wide serial queue: only one file processes at a time, no matter how
+  // many drops or batches arrive. Refs persist across re-renders so a single
+  // queue and "is processing" flag survive the whole UploadTab lifetime.
+  const processingRef = useRef(false);
+  const queueRef = useRef([]);
 
-    // Process them one at a time; processOne flips each from pending → processing
-    for (let i = 0; i < newFiles.length; i++) {
-      if (i > 0) await new Promise(res => setTimeout(res, 1000));
-      await processOne(newFiles[i]);
+  const runQueue = useCallback(async () => {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    try {
+      while (queueRef.current.length > 0) {
+        const file = queueRef.current.shift();
+        await processOne(file);
+      }
+    } finally {
+      processingRef.current = false;
     }
-  }, [processOne, setFiles]);
+  }, [processOne]);
+
+  const enqueueFile = useCallback((file) => {
+    setFiles(prev => {
+      if (prev.find(e => e.name === file.name)) return prev;
+      return [...prev, { name: file.name, status: "pending", file, attempts: 0 }];
+    });
+    queueRef.current.push(file);
+    runQueue();
+  }, [runQueue, setFiles]);
 
   const onDrop = useCallback(e => {
     e.preventDefault(); setDragging(false);
     const dropped = Array.from(e.dataTransfer.files).filter(f =>
       /pdf|excel|spreadsheet|csv/.test(f.type) || /\.(pdf|xlsx|xls|csv)$/i.test(f.name)
     );
-    if (dropped.length) process(dropped);
-  }, [process]);
+    dropped.forEach(enqueueFile);
+  }, [enqueueFile]);
 
   const onPick = useCallback(e => {
     const picked = Array.from(e.target.files);
-    if (picked.length) process(picked);
+    picked.forEach(enqueueFile);
     e.target.value = "";
-  }, [process]);
+  }, [enqueueFile]);
 
   const dotStyle = s => ({
     width:10, height:10, borderRadius:"50%", flexShrink:0,
