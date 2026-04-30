@@ -306,10 +306,10 @@ async function extractFromFile(file) {
 
   let resp = await fetch("/api/extract", { method:"POST", headers, body });
 
-  // On 429, wait the Retry-After window (+1s buffer) and try once more.
+  // On 429, wait exactly the Retry-After window and try once more.
   if (resp.status === 429) {
-    const retryAfter = parseInt(resp.headers.get("retry-after") || "15", 10) || 15;
-    await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+    const retryAfter = parseInt(resp.headers.get("retry-after") || "20", 10) || 20;
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
     resp = await fetch("/api/extract", { method:"POST", headers, body });
   }
 
@@ -491,6 +491,10 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
       while (queueRef.current.length > 0) {
         const file = queueRef.current.shift();
         await processOne(file);
+        // Fixed 3s gap between files to stay under Anthropic rate limits
+        if (queueRef.current.length > 0) {
+          await new Promise(res => setTimeout(res, 3000));
+        }
       }
     } finally {
       processingRef.current = false;
