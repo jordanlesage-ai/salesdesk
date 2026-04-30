@@ -265,26 +265,43 @@ function parseResetHeader(value) {
   return null;
 }
 
+// Threshold-based pacing. Anthropic uses a sliding bucket — we can keep
+// firing as long as `remaining-*` is healthy. Only wait when one of the
+// budgets actually approaches depletion. For AP PDFs the token budget is
+// usually the binding constraint (each call consumes ~10–30K tokens).
 function recordNextAllowed(resp) {
-  const ms = parseResetHeader(resp.headers.get("x-ratelimit-reset-requests"));
-  // 500ms buffer cushions clock skew between client + Anthropic
-  window._nextAllowedRequest = Date.now() + (ms != null ? ms : 2000) + 500;
+  const reqRem = parseInt(resp.headers.get("x-ratelimit-remaining-requests") || "999", 10);
+  const tokRem = parseInt(resp.headers.get("x-ratelimit-remaining-tokens") || "999999", 10);
+  const reqResetMs = parseResetHeader(resp.headers.get("x-ratelimit-reset-requests"));
+  const tokResetMs = parseResetHeader(resp.headers.get("x-ratelimit-reset-tokens"));
+
+  let waitMs = 0;
+  // Wait for token reset if we don't have headroom for another typical call
+  if (tokRem < 20000 && tokResetMs != null) waitMs = Math.max(waitMs, tokResetMs);
+  // Wait for request reset if we're nearly out of request budget
+  if (reqRem < 3 && reqResetMs != null) waitMs = Math.max(waitMs, reqResetMs);
+
+  console.log("[ratelimit]", { reqRem, tokRem, reqResetMs, tokResetMs, computedWaitMs: waitMs });
+
+  // 500ms buffer cushions clock skew. waitMs of 0 means fire immediately.
+  window._nextAllowedRequest = Date.now() + waitMs + (waitMs > 0 ? 500 : 0);
 }
 
-async function callExtractAPI(body) {
+async function callExtractAPI(body, onProgress) {
   const headers = { "Content-Type": "application/json" };
   const bodyStr = JSON.stringify(body);
 
   let resp = await fetch("/api/extract", { method:"POST", headers, body: bodyStr });
 
   if (resp.status === 429) {
-    // Wait Retry-After exactly, with a per-second countdown the UI can read.
     const retryAfter = parseInt(resp.headers.get("retry-after") || "30", 10) || 30;
     for (let i = retryAfter; i > 0; i--) {
+      onProgress?.(`⏳ Rate limited, retrying in ${i}s…`);
       window._rateLimitCountdown = i;
       await new Promise(r => setTimeout(r, 1000));
     }
     delete window._rateLimitCountdown;
+    onProgress?.("🤖 Retrying...");
 
     resp = await fetch("/api/extract", { method:"POST", headers, body: bodyStr });
     if (!resp.ok) throw new Error(`API error ${resp.status}`);
@@ -341,7 +358,7 @@ async function extractFromFile(file, onProgress) {
       max_tokens: 800,
       system: SYS_PROMPT,
       messages: [{ role:"user", content:`Extract sales order data from this CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }],
-    });
+    }, onProgress);
   }
 
   const arrayBuf = await file.arrayBuffer();
@@ -370,7 +387,7 @@ async function extractFromFile(file, onProgress) {
         { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
         { type:"text", text:"Extract the sales order data. Return ONLY a JSON object." }
       ]}],
-    });
+    }, onProgress);
   }
 
   throw new Error("Unrecognized file format (not a PDF, ZIP, or spreadsheet)");
@@ -515,10 +532,13 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
 
     // Single attempt — extractFromFile handles its own one-shot 429 retry.
     // On any other failure, fall back to a placeholder so the file is not lost.
+    const reportProgress = (msg) => {
+      setFiles(prev => prev.map(e => e.name===name ? {...e, statusMsg: msg} : e));
+    };
     try {
-      const data = await extractFromFile(file);
+      const data = await extractFromFile(file, reportProgress);
       await onOrderAdded({ fileName: name, ...data });
-      setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done"} : e));
+      setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done", statusMsg: undefined} : e));
     } catch (err) {
       try {
         const fallback = {
@@ -631,7 +651,7 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
             : f.status === "pending"
             ? <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>{f.statusMsg || "Pending"}</span>
             : <span style={{ fontSize:12, color:f.status==="done" ? T.upcoming : T.gold, fontWeight:600 }}>
-                {f.status==="done" ? "Extracted" : "Processing…"}
+                {f.status==="done" ? "Extracted" : (f.statusMsg || "Processing…")}
               </span>
           }
         </div>
