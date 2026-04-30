@@ -296,8 +296,6 @@ function recordNextAllowed(resp) {
   // Wait for request reset if nearly out of request budget
   if (reqRem < 3 && reqResetMs != null) waitMs = Math.max(waitMs, reqResetMs);
 
-  console.log("[ratelimit]", JSON.stringify({ reqRem, inputTokRem, reqResetMs, inputResetMs, computedWaitMs: waitMs }));
-
   // 500ms buffer cushions clock skew. waitMs of 0 means fire immediately.
   window._nextAllowedRequest = Date.now() + waitMs + (waitMs > 0 ? 500 : 0);
 }
@@ -382,7 +380,6 @@ async function extractFromFile(file, onProgress) {
   const isZip = head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04;
   // PDF magic: 25 50 44 46 ("%PDF")
   const isRealPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
-  console.log("[extract]", file.name, "isZip:", isZip, "isRealPdf:", isRealPdf, "bytes:", Array.from(head));
 
   if (isZip) {
     // AP client files — parse structured .txt pages directly, NO API call.

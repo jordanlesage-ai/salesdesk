@@ -27,15 +27,12 @@ export default async function handler(req, res) {
     // Forward every rate-limit-related header so the client can pace itself.
     // Anthropic uses `anthropic-ratelimit-*` naming; we also pass through
     // any `x-ratelimit-*` and `retry-after` for forward compat.
-    const forwarded = [];
     for (const [key, val] of response.headers.entries()) {
       const k = key.toLowerCase();
       if (k.startsWith("anthropic-ratelimit") || k.startsWith("x-ratelimit") || k === "retry-after") {
         res.setHeader(key, val);
-        forwarded.push(key);
       }
     }
-    console.log("[extract] forwarded headers:", forwarded.join(",") || "(none)");
 
     if (!response.ok) {
       console.error("Anthropic error:", JSON.stringify(data));
