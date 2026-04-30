@@ -296,6 +296,11 @@ function parseResponse(data) {
 }
 
 async function extractFromFile(file, onProgress) {
+  // DIAGNOSTIC — remove once ZIP routing is confirmed in production
+  const headBytes = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+  const hex = [...headBytes].map(b => b.toString(16).padStart(2, "0")).join(" ");
+  console.log("[extractFromFile]", file.name, "type:", file.type, "size:", file.size, "first4:", hex, headBytes);
+
   const name = (file.name || "").toLowerCase();
   const ext = (name.match(/\.([^.]+)$/) || [])[1] || "";
   const typeStr = file.type || "";
@@ -303,6 +308,7 @@ async function extractFromFile(file, onProgress) {
   // Spreadsheets first — XLSX is internally a ZIP, so route by extension/MIME
   // before doing magic-byte detection or it would be mis-classified as a ZIP.
   if (ext === "xlsx" || ext === "xls" || ext === "csv" || /excel|spreadsheet|csv/.test(typeStr)) {
+    console.log("[extractFromFile] → spreadsheet path");
     onProgress?.("🤖 Extracting...");
     const csv = await parseSpreadsheet(file);
     return callExtractAPI({
@@ -319,15 +325,25 @@ async function extractFromFile(file, onProgress) {
   const isZip = head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04;
   // PDF magic: 25 50 44 46 ("%PDF")
   const isRealPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+  console.log("[extractFromFile] isZip:", isZip, "isRealPdf:", isRealPdf);
 
   if (isZip) {
-    // AP client files — parse structured .txt pages directly, NO API call.
+    console.log("[extractFromFile] → ZIP detected, using parseZipDirect");
     onProgress?.("📖 Reading file...");
-    const files = unzipSync(new Uint8Array(arrayBuf));
-    return parseZipDirect(files);
+    try {
+      const files = unzipSync(new Uint8Array(arrayBuf));
+      console.log("[extractFromFile] unzipped entries:", Object.keys(files));
+      const result = parseZipDirect(files);
+      console.log("[extractFromFile] parseZipDirect result:", result);
+      return result;
+    } catch (err) {
+      console.error("[extractFromFile] parseZipDirect failed:", err);
+      throw err; // do NOT fall through to API
+    }
   }
 
   if (isRealPdf) {
+    console.log("[extractFromFile] → real PDF path (sending to /api/extract)");
     onProgress?.("🤖 Extracting...");
     const b64 = bufferToBase64(arrayBuf);
     return callExtractAPI({
