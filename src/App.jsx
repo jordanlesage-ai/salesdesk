@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { unzipSync, strFromU8 } from "fflate";
 import { SignIn, SignedIn, SignedOut, UserButton, useAuth } from "@clerk/clerk-react";
 
 /* ─── Google Font ─── */
@@ -187,44 +188,97 @@ function parseSpreadsheet(file) {
   });
 }
 
-function readBase64(file) {
+function readArrayBuffer(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result.split(",")[1]);
+    reader.onload = e => resolve(e.target.result);
     reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.readAsArrayBuffer(file);
   });
+}
+
+function bufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Some "PDFs" uploaded by clients are actually ZIP archives containing
+// per-page JPEGs and .txt files (one per page). Extract the .txt files
+// in numeric filename order and concatenate as labeled pages.
+function unzipTxtPages(buffer) {
+  const files = unzipSync(new Uint8Array(buffer));
+  const pages = Object.entries(files)
+    .filter(([name]) => /\.txt$/i.test(name))
+    .map(([name, data]) => {
+      const m = name.match(/(\d+)/);
+      return { num: m ? parseInt(m[1], 10) : 9999, text: strFromU8(data) };
+    })
+    .sort((a, b) => a.num - b.num);
+
+  if (!pages.length) throw new Error("ZIP archive contains no .txt page files");
+
+  return pages.map(p => `\n\n--- Page ${p.num} ---\n${p.text}`).join("");
 }
 
 /* ─── AI Extraction ─── */
 // NOTE: Uses /api/extract so the API key stays server-side (Vercel function)
-const SYS_PROMPT = `You are a sales document parser for Alimentation Première meat-order Excel workbooks. Spreadsheet input is provided as multiple sections separated by "=== Sheet: <name> ===" headers. Return ONLY a JSON object with these exact keys:
+const SYS_PROMPT = `You are a sales document parser for Alimentation Première meat-order documents. Input arrives in one of two formats:
 
-- client (string): from the "Entente" sheet, the value in the cell to the right of (or just below) the row labeled "Client 1:".
-- date (string): from the "Entente" sheet, the value next to the row labeled "Date:". Format as DD-MM-YYYY (convert from jj/mm/aaaa or any other format).
-- deliveryDate (string or null): from the "Fiche Client" sheet, the value next to the row labeled "1e livraison le:". Format as DD-MM-YYYY. Return null if not present.
-- total (number): from the "Fiche Client" sheet, the numeric value in the cell labeled "vente totale :". No currency symbols, no thousand separators.
-- items (array of strings): from the "Résumé" sheet, every product whose product name appears in column 2 AND for which AT LEAST ONE of the four quantity columns immediately to the right (the four numeric columns) is greater than 0. Use the column-2 product name as the string. Skip products where all four quantity columns are 0, blank, or non-numeric. Skip header rows.
+A) EXCEL workbooks: sections separated by "=== Sheet: <name> ===" headers. Sheets named "Entente", "Fiche Client", and "Résumé".
 
-If the document is NOT an Alimentation Première multi-sheet workbook (e.g. a generic PDF, a single-sheet CSV, or a sheet whose names don't match), fall back to extracting the same five fields from wherever they appear in the document.
+B) DOCUMENT TEXT extracted from a ZIP archive of per-page .txt files: sections separated by "--- Page N ---" headers. Page 1 holds the Entente data (client + order date). Later pages hold product/résumé data with rows like "CODE  Description  Format  Price  [qty per delivery]  Total $" and running "Sous-total: X,XXX.XX $" lines.
+
+Return ONLY a JSON object with these exact keys:
+
+- client (string): EXCEL — "Entente" sheet, value next to (right of or below) "Client 1:". ZIP — Page 1 next to "Client 1:".
+- date (string): EXCEL — "Entente" sheet, value next to "Date:". ZIP — Page 1 next to "Date:". Format DD-MM-YYYY (convert from jj/mm/aaaa or any other).
+- deliveryDate (string or null): EXCEL — "Fiche Client" sheet, value next to "1e livraison le:". ZIP — any page where this label appears. Format DD-MM-YYYY. Null if not present.
+- total (number): the GRAND TOTAL across all deliveries combined. EXCEL — the numeric value at "vente totale :" in "Fiche Client". ZIP — prefer a "vente totale" line if present; otherwise SUM every "Sous-total: X,XXX.XX $" line across all pages. No currency symbols, no thousand separators.
+- items (array of strings): every product whose quantity is > 0. EXCEL — "Résumé" sheet column 2 where AT LEAST ONE of the four numeric qty columns to its right is > 0; use the column-2 name. ZIP — product rows on pages 2+ where any per-delivery qty is > 0; use the description text. Skip products with all-zero quantities and skip header rows.
+
+If the document matches neither AP format (generic PDF, single-sheet CSV, etc.), fall back to extracting the same five fields from wherever they appear.
 
 Return ONLY valid JSON. No markdown fences, no explanation, no extra keys.`;
 
 const MAX_RETRIES = 3;
 
 async function extractFromFile(file) {
-  const isPdf = file.type === "application/pdf";
+  const name = (file.name || "").toLowerCase();
+  const ext = (name.match(/\.([^.]+)$/) || [])[1] || "";
+  const typeStr = file.type || "";
+
   let messages;
 
-  if (isPdf) {
-    const b64 = await readBase64(file);
-    messages = [{ role:"user", content:[
-      { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
-      { type:"text", text:"Extract the sales order data from this document. Return ONLY a JSON object." }
-    ]}];
-  } else {
+  // Spreadsheets first — XLSX is internally a ZIP, so route by extension/MIME
+  // before doing magic-byte detection or it would be mis-classified as a ZIP.
+  if (ext === "xlsx" || ext === "xls" || ext === "csv" || /excel|spreadsheet|csv/.test(typeStr)) {
     const csv = await parseSpreadsheet(file);
     messages = [{ role:"user", content:`Extract the sales order data from this spreadsheet CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }];
+  } else {
+    const buffer = await readArrayBuffer(file);
+    const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+    // ZIP magic: 50 4B 03 04
+    const isZip = head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04;
+    // PDF magic: 25 50 44 46 ("%PDF")
+    const isRealPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+
+    if (isZip) {
+      const text = unzipTxtPages(buffer);
+      messages = [{ role:"user", content:`Extract the sales order data from this document text:\n\n${text}\n\nReturn ONLY a JSON object.` }];
+    } else if (isRealPdf) {
+      const b64 = bufferToBase64(buffer);
+      messages = [{ role:"user", content:[
+        { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+        { type:"text", text:"Extract the sales order data from this document. Return ONLY a JSON object." }
+      ]}];
+    } else {
+      throw new Error("Unrecognized file format (not a PDF, ZIP, or spreadsheet)");
+    }
   }
 
   const resp = await fetch("/api/extract", {
