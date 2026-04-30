@@ -24,9 +24,21 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // Forward Retry-After so the client can honor Anthropic's backoff window
-    const retryAfter = response.headers.get("retry-after");
-    if (retryAfter) res.setHeader("Retry-After", retryAfter);
+    // Forward all rate-limit headers so the client can pace itself precisely
+    // against Anthropic's actual quotas instead of guessing with fixed delays.
+    const HEADERS_TO_FORWARD = [
+      "retry-after",
+      "x-ratelimit-limit-requests",
+      "x-ratelimit-remaining-requests",
+      "x-ratelimit-reset-requests",
+      "x-ratelimit-limit-tokens",
+      "x-ratelimit-remaining-tokens",
+      "x-ratelimit-reset-tokens",
+    ];
+    for (const h of HEADERS_TO_FORWARD) {
+      const v = response.headers.get(h);
+      if (v) res.setHeader(h, v);
+    }
 
     if (!response.ok) {
       console.error("Anthropic error:", JSON.stringify(data));

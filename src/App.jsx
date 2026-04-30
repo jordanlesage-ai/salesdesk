@@ -249,20 +249,51 @@ function parseZipDirect(files) {
   return { client, date, deliveryDate, total, items };
 }
 
+// Parse Anthropic's x-ratelimit-reset-* header. Anthropic returns RFC 3339
+// timestamps in production, but the helper also accepts duration strings
+// ("1s" / "500ms" / "1.5s") for forward compatibility / local testing.
+// Returns milliseconds-from-now until reset, or null if unparseable.
+function parseResetHeader(value) {
+  if (!value) return null;
+  if (/^\d+(\.\d+)?ms$/i.test(value)) return parseInt(value, 10);
+  if (/^\d+(\.\d+)?s$/i.test(value)) return parseFloat(value) * 1000;
+  // Strict ISO-shape guard so plain "1" doesn't accidentally Date.parse to year 2001
+  if (value.includes("T") || value.includes("-")) {
+    const ts = Date.parse(value);
+    if (!isNaN(ts)) return Math.max(0, ts - Date.now());
+  }
+  return null;
+}
+
+function recordNextAllowed(resp) {
+  const ms = parseResetHeader(resp.headers.get("x-ratelimit-reset-requests"));
+  // 500ms buffer cushions clock skew between client + Anthropic
+  window._nextAllowedRequest = Date.now() + (ms != null ? ms : 2000) + 500;
+}
+
 async function callExtractAPI(body) {
   const headers = { "Content-Type": "application/json" };
   const bodyStr = JSON.stringify(body);
 
   let resp = await fetch("/api/extract", { method:"POST", headers, body: bodyStr });
 
-  // On 429, wait exactly the Retry-After window and try once more.
   if (resp.status === 429) {
-    const retryAfter = parseInt(resp.headers.get("retry-after") || "20", 10) || 20;
-    await new Promise(r => setTimeout(r, retryAfter * 1000));
+    // Wait Retry-After exactly, with a per-second countdown the UI can read.
+    const retryAfter = parseInt(resp.headers.get("retry-after") || "30", 10) || 30;
+    for (let i = retryAfter; i > 0; i--) {
+      window._rateLimitCountdown = i;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    delete window._rateLimitCountdown;
+
     resp = await fetch("/api/extract", { method:"POST", headers, body: bodyStr });
+    if (!resp.ok) throw new Error(`API error ${resp.status}`);
+    recordNextAllowed(resp);
+    return parseResponse(await resp.json());
   }
 
   if (!resp.ok) throw new Error(`API error ${resp.status}`);
+  recordNextAllowed(resp);
   return parseResponse(await resp.json());
 }
 
@@ -296,11 +327,6 @@ function parseResponse(data) {
 }
 
 async function extractFromFile(file, onProgress) {
-  // DIAGNOSTIC — remove once ZIP routing is confirmed in production
-  const headBytes = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-  const hex = [...headBytes].map(b => b.toString(16).padStart(2, "0")).join(" ");
-  console.log("[extractFromFile]", file.name, "type:", file.type, "size:", file.size, "first4:", hex, headBytes);
-
   const name = (file.name || "").toLowerCase();
   const ext = (name.match(/\.([^.]+)$/) || [])[1] || "";
   const typeStr = file.type || "";
@@ -308,7 +334,6 @@ async function extractFromFile(file, onProgress) {
   // Spreadsheets first — XLSX is internally a ZIP, so route by extension/MIME
   // before doing magic-byte detection or it would be mis-classified as a ZIP.
   if (ext === "xlsx" || ext === "xls" || ext === "csv" || /excel|spreadsheet|csv/.test(typeStr)) {
-    console.log("[extractFromFile] → spreadsheet path");
     onProgress?.("🤖 Extracting...");
     const csv = await parseSpreadsheet(file);
     return callExtractAPI({
@@ -325,25 +350,15 @@ async function extractFromFile(file, onProgress) {
   const isZip = head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04;
   // PDF magic: 25 50 44 46 ("%PDF")
   const isRealPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
-  console.log("[extractFromFile] isZip:", isZip, "isRealPdf:", isRealPdf);
 
   if (isZip) {
-    console.log("[extractFromFile] → ZIP detected, using parseZipDirect");
+    // AP client files — parse structured .txt pages directly, NO API call.
     onProgress?.("📖 Reading file...");
-    try {
-      const files = unzipSync(new Uint8Array(arrayBuf));
-      console.log("[extractFromFile] unzipped entries:", Object.keys(files));
-      const result = parseZipDirect(files);
-      console.log("[extractFromFile] parseZipDirect result:", result);
-      return result;
-    } catch (err) {
-      console.error("[extractFromFile] parseZipDirect failed:", err);
-      throw err; // do NOT fall through to API
-    }
+    const files = unzipSync(new Uint8Array(arrayBuf));
+    return parseZipDirect(files);
   }
 
   if (isRealPdf) {
-    console.log("[extractFromFile] → real PDF path (sending to /api/extract)");
     onProgress?.("🤖 Extracting...");
     const b64 = bufferToBase64(arrayBuf);
     return callExtractAPI({
@@ -534,15 +549,32 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
       while (queueRef.current.length > 0) {
         const file = queueRef.current.shift();
         await processOne(file);
-        // Fixed 3s gap between files to stay under Anthropic rate limits
-        if (queueRef.current.length > 0) {
-          await new Promise(res => setTimeout(res, 3000));
+
+        // Wait exactly until Anthropic's rate limit window resets. Set only
+        // by API calls (callExtractAPI → recordNextAllowed), so ZIP-only
+        // batches skip the wait entirely and consecutive API calls pace
+        // themselves precisely against the actual quota.
+        if (queueRef.current.length > 0 && window._nextAllowedRequest) {
+          const waitMs = Math.max(0, window._nextAllowedRequest - Date.now());
+          if (waitMs > 0) {
+            const nextName = queueRef.current[0]?.name;
+            const totalSec = Math.ceil(waitMs / 1000);
+            for (let remaining = totalSec; remaining > 0; remaining--) {
+              setFiles(prev => prev.map(e =>
+                e.name === nextName ? { ...e, statusMsg: `⏳ ${remaining}s…` } : e
+              ));
+              await new Promise(res => setTimeout(res, 1000));
+            }
+            setFiles(prev => prev.map(e =>
+              e.name === nextName ? { ...e, statusMsg: undefined } : e
+            ));
+          }
         }
       }
     } finally {
       processingRef.current = false;
     }
-  }, [processOne]);
+  }, [processOne, setFiles]);
 
   const enqueueFile = useCallback((file) => {
     setFiles(prev => {
@@ -596,7 +628,7 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
           {f.status === "error"
             ? <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed</span>
             : f.status === "pending"
-            ? <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>Pending</span>
+            ? <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>{f.statusMsg || "Pending"}</span>
             : <span style={{ fontSize:12, color:f.status==="done" ? T.upcoming : T.gold, fontWeight:600 }}>
                 {f.status==="done" ? "Extracted" : "Processing…"}
               </span>
