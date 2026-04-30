@@ -1,5 +1,6 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { SignIn, SignedIn, SignedOut, UserButton, useAuth, useUser } from "@clerk/clerk-react";
 
 /* ─── Google Font ─── */
 const fontLink = document.createElement("link");
@@ -384,15 +385,14 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
     while (attempt < MAX_RETRIES) {
       try {
         const data = await extractFromFile(file);
-        const order = { id: Date.now() + Math.random(), fileName: name, ...data };
-        onOrderAdded(order);
+        await onOrderAdded({ fileName: name, ...data });
         setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done"} : e));
         return;
       } catch(err) {
         attempt++;
         if (attempt < MAX_RETRIES) {
           setFiles(prev => prev.map(e => e.name===name ? {...e, status:"processing", attempts:attempt} : e));
-          await new Promise(res => setTimeout(res, 1500));
+          await new Promise(res => setTimeout(res, 2000));
         } else {
           setFiles(prev => prev.map(e => e.name===name ? {...e, status:"error", attempts:attempt} : e));
         }
@@ -400,8 +400,11 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
     }
   }, [onOrderAdded, setFiles]);
 
-  const process = useCallback((newFiles) => {
-    newFiles.forEach(f => processOne(f));
+  const process = useCallback(async (newFiles) => {
+    for (let i = 0; i < newFiles.length; i++) {
+      if (i > 0) await new Promise(res => setTimeout(res, 1000));
+      await processOne(newFiles[i]);
+    }
   }, [processOne]);
 
   const onDrop = useCallback(e => {
@@ -795,20 +798,138 @@ function CancelledTab({ orders, onRestore, onDelete }) {
 }
 
 /* ─── Main App ─── */
-const TABS = ["Upload","All Orders","Weekly","Monthly","Yearly","Clients","Deliveries","Cancelled"];
+const BASE_TABS = ["Upload","All Orders","Weekly","Monthly","Yearly","Clients","Deliveries","Cancelled"];
+
+function tabsForRole(role) {
+  if (role === "god") return [...BASE_TABS, "Dashboard", "Admin"];
+  if (role === "manager") return [...BASE_TABS, "Dashboard"];
+  return BASE_TABS;
+}
+
+function roleColor(role) {
+  if (role === "god") return T.gold;
+  if (role === "manager") return T.upcoming;
+  return T.muted;
+}
 
 export default function SalesDesk() {
+  return (
+    <>
+      <SignedOut>
+        <SignInScreen/>
+      </SignedOut>
+      <SignedIn>
+        <AuthedApp/>
+      </SignedIn>
+    </>
+  );
+}
+
+function SignInScreen() {
+  return (
+    <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.font, color:T.text, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:32, fontWeight:700, marginBottom:8, letterSpacing:"-0.5px" }}>
+          Sales<span style={{ color:T.gold }}>Desk</span>
+        </div>
+        <div style={{ fontSize:13, color:T.muted, marginBottom:24 }}>Sign in to continue</div>
+        <SignIn appearance={{ baseTheme: undefined, variables: { colorPrimary: T.gold, colorBackground: T.card, colorText: T.text, colorInputBackground: T.bg, colorInputText: T.text } }}/>
+      </div>
+    </div>
+  );
+}
+
+function AuthedApp() {
+  const { getToken } = useAuth();
+  const { user } = useUser();
+  const [me, setMe] = useState(null);
   const [orders, setOrders] = useState([]);
   const [tab, setTab] = useState("Upload");
   const [uploadFiles, setUploadFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const addOrder     = useCallback(order => setOrders(prev=>[...prev,order]), []);
-  const deleteOrder  = useCallback(id    => setOrders(prev=>prev.filter(o=>o.id!==id)), []);
-  const cancelOrder  = useCallback(id    => setOrders(prev=>prev.map(o=>o.id===id ? {...o,cancelled:true}  : o)), []);
-  const restoreOrder = useCallback(id    => setOrders(prev=>prev.map(o=>o.id===id ? {...o,cancelled:false} : o)), []);
+  const apiFetch = useCallback(async (path, opts = {}) => {
+    const token = await getToken();
+    const resp = await fetch(path, {
+      ...opts,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(opts.headers || {}),
+      },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`${resp.status} ${text || resp.statusText}`);
+    }
+    if (resp.status === 204) return null;
+    return resp.json();
+  }, [getToken]);
+
+  const reloadOrders = useCallback(async () => {
+    try {
+      const data = await apiFetch("/api/orders");
+      setOrders(data || []);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const meData = await apiFetch("/api/me");
+        if (cancelled) return;
+        setMe(meData);
+        const ordersData = await apiFetch("/api/orders");
+        if (cancelled) return;
+        setOrders(ordersData || []);
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [apiFetch]);
+
+  const addOrder = useCallback(async (extracted) => {
+    const saved = await apiFetch("/api/orders", { method:"POST", body: JSON.stringify(extracted) });
+    setOrders(prev => [saved, ...prev]);
+  }, [apiFetch]);
+
+  const cancelOrder = useCallback(async (id) => {
+    const updated = await apiFetch(`/api/orders?id=${encodeURIComponent(id)}`, { method:"PATCH", body: JSON.stringify({ cancelled:true }) });
+    setOrders(prev => prev.map(o => o.id===id ? updated : o));
+  }, [apiFetch]);
+
+  const restoreOrder = useCallback(async (id) => {
+    const updated = await apiFetch(`/api/orders?id=${encodeURIComponent(id)}`, { method:"PATCH", body: JSON.stringify({ cancelled:false }) });
+    setOrders(prev => prev.map(o => o.id===id ? updated : o));
+  }, [apiFetch]);
+
+  const deleteOrder = useCallback(async (id) => {
+    await apiFetch(`/api/orders?id=${encodeURIComponent(id)}`, { method:"DELETE" });
+    setOrders(prev => prev.filter(o => o.id!==id));
+  }, [apiFetch]);
 
   const activeOrders    = useMemo(()=>orders.filter(o=>!o.cancelled), [orders]);
   const cancelledOrders = useMemo(()=>orders.filter(o=>o.cancelled),  [orders]);
+  const tabs = useMemo(()=>tabsForRole(me?.role), [me]);
+
+  // If role changes (e.g., god demoted), snap selected tab back to a valid one
+  useEffect(() => {
+    if (me && !tabs.includes(tab)) setTab("Upload");
+  }, [tabs, tab, me]);
+
+  if (loading) {
+    return <FullScreenMsg msg="Loading…"/>;
+  }
+  if (error) {
+    return <FullScreenMsg msg={`Error: ${error}`} sub="Check that env vars are set on Vercel: VITE_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN"/>;
+  }
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.font, color:T.text, padding:"24px 28px" }}>
@@ -820,9 +941,17 @@ export default function SalesDesk() {
           </div>
           <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>AI-Powered Sales File Manager</div>
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ width:8, height:8, borderRadius:"50%", background:T.upcoming, boxShadow:`0 0 6px ${T.upcoming}` }}/>
-          <span style={{ fontSize:12, color:T.muted }}>AI Connected</span>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <div style={{ width:8, height:8, borderRadius:"50%", background:T.upcoming, boxShadow:`0 0 6px ${T.upcoming}` }}/>
+            <span style={{ fontSize:12, color:T.muted }}>AI Connected</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 10px", background:T.card, border:`1px solid ${T.border}`, borderRadius:20 }}>
+            <span style={{ fontSize:11, color:T.muted }}>{me?.email}</span>
+            <span style={{ fontSize:10, fontWeight:700, color:roleColor(me?.role), textTransform:"uppercase", letterSpacing:"0.5px" }}>{me?.role}</span>
+            {me?.office && <span style={{ fontSize:10, color:T.muted, textTransform:"uppercase" }}>· {me.office}</span>}
+          </div>
+          <UserButton afterSignOutUrl="/"/>
         </div>
       </div>
 
@@ -830,7 +959,7 @@ export default function SalesDesk() {
 
       {/* Tab Switcher */}
       <div style={{ display:"flex", gap:6, marginBottom:24, flexWrap:"wrap" }}>
-        {TABS.map(t=>(
+        {tabs.map(t=>(
           <button key={t} onClick={()=>setTab(t)}
             style={{ padding:"8px 18px", borderRadius:20, border:`1px solid ${tab===t ? T.gold : T.border}`, background:tab===t ? `${T.gold}20` : T.card, color:tab===t ? T.gold : T.muted, cursor:"pointer", fontFamily:T.font, fontSize:13, fontWeight:tab===t?600:400, transition:"all .15s" }}>
             {t}
@@ -847,6 +976,202 @@ export default function SalesDesk() {
       {tab==="Clients"    && <ClientsTab orders={activeOrders}/>}
       {tab==="Deliveries" && <DeliveriesTab orders={activeOrders} onCancel={cancelOrder}/>}
       {tab==="Cancelled"  && <CancelledTab orders={cancelledOrders} onRestore={restoreOrder} onDelete={deleteOrder}/>}
+      {tab==="Dashboard"  && <DashboardTab orders={orders} me={me}/>}
+      {tab==="Admin"      && <AdminTab apiFetch={apiFetch}/>}
     </div>
+  );
+}
+
+function FullScreenMsg({ msg, sub }) {
+  return (
+    <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.font, color:T.text, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+      <div style={{ textAlign:"center", maxWidth:520 }}>
+        <div style={{ fontSize:18, color:T.text, marginBottom:8 }}>{msg}</div>
+        {sub && <div style={{ fontSize:12, color:T.muted, lineHeight:1.5 }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Dashboard Tab (manager + god) ─── */
+function DashboardTab({ orders, me }) {
+  const active = useMemo(()=>orders.filter(o=>!o.cancelled), [orders]);
+  const today = todayStr();
+  const monthKey = today.slice(0,7);
+
+  const byRep = useMemo(() => {
+    const map = new Map();
+    for (const o of active) {
+      const key = o.repUserId || o.repEmail || "unknown";
+      if (!map.has(key)) {
+        map.set(key, { repUserId:key, repEmail:o.repEmail||"—", repName:o.repName||o.repEmail||"—", office:o.office||"—", count:0, total:0, monthTotal:0 });
+      }
+      const r = map.get(key);
+      r.count += 1;
+      r.total += Number(o.total)||0;
+      if ((o.date||"").slice(0,7) === monthKey) r.monthTotal += Number(o.total)||0;
+    }
+    return [...map.values()].sort((a,b) => b.total - a.total);
+  }, [active, monthKey]);
+
+  const byOffice = useMemo(() => {
+    const map = new Map();
+    for (const o of active) {
+      const key = o.office || "—";
+      if (!map.has(key)) map.set(key, { office:key, count:0, total:0 });
+      const r = map.get(key);
+      r.count += 1;
+      r.total += Number(o.total)||0;
+    }
+    return [...map.values()].sort((a,b) => b.total - a.total);
+  }, [active]);
+
+  if (!orders.length) return <Empty msg="No orders yet."/>;
+
+  return (
+    <div>
+      <Card style={{ marginBottom:16 }}>
+        <div style={{ fontSize:14, fontWeight:600, marginBottom:12, color:T.gold }}>
+          Rep Performance {me?.role === "manager" ? `· ${me.office}` : "· all offices"}
+        </div>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+          <thead>
+            <tr style={{ color:T.muted, textAlign:"left" }}>
+              <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500 }}>Rep</th>
+              <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500 }}>Office</th>
+              <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500, textAlign:"right" }}>Orders</th>
+              <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500, textAlign:"right" }}>This Month</th>
+              <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500, textAlign:"right" }}>Total Sales</th>
+              <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500, textAlign:"right" }}>Commission (9%)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byRep.map(r => (
+              <tr key={r.repUserId}>
+                <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}` }}>
+                  <div style={{ color:T.text }}>{r.repName}</div>
+                  <div style={{ fontSize:11, color:T.muted }}>{r.repEmail}</div>
+                </td>
+                <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, color:T.muted }}>{r.office}</td>
+                <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, textAlign:"right", color:T.text }}>{r.count}</td>
+                <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, textAlign:"right", color:T.text }}>{fmtMoney(r.monthTotal)}</td>
+                <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, textAlign:"right", color:T.text, fontWeight:600 }}>{fmtMoney(r.total)}</td>
+                <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, textAlign:"right", color:T.gold, fontWeight:600 }}>{fmtMoney(commission(r.total))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      {me?.role === "god" && byOffice.length > 0 && (
+        <Card>
+          <div style={{ fontSize:14, fontWeight:600, marginBottom:12, color:T.gold }}>By Office</div>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead>
+              <tr style={{ color:T.muted, textAlign:"left" }}>
+                <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500 }}>Office</th>
+                <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500, textAlign:"right" }}>Orders</th>
+                <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500, textAlign:"right" }}>Total Sales</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byOffice.map(o => (
+                <tr key={o.office}>
+                  <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, color:T.text, textTransform:"capitalize" }}>{o.office}</td>
+                  <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, textAlign:"right", color:T.text }}>{o.count}</td>
+                  <td style={{ padding:"8px 4px", borderBottom:`1px solid ${T.border}`, textAlign:"right", color:T.gold, fontWeight:600 }}>{fmtMoney(o.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ─── Admin Tab (god only) ─── */
+function AdminTab({ apiFetch }) {
+  const [data, setData] = useState({ users: [], offices: [] });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [savingId, setSavingId] = useState(null);
+
+  const reload = useCallback(async () => {
+    try {
+      setLoading(true);
+      const d = await apiFetch("/api/users");
+      setData(d);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const updateUser = async (userId, patch) => {
+    try {
+      setSavingId(userId);
+      const updated = await apiFetch(`/api/users?id=${encodeURIComponent(userId)}`, { method:"PATCH", body: JSON.stringify(patch) });
+      setData(prev => ({ ...prev, users: prev.users.map(u => u.userId===userId ? updated : u) }));
+    } catch (e) {
+      alert(`Update failed: ${e.message}`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  if (loading) return <Empty msg="Loading users…"/>;
+  if (error)   return <Empty msg={`Error: ${error}`}/>;
+  if (!data.users.length) return <Empty msg="No users yet."/>;
+
+  return (
+    <Card>
+      <div style={{ fontSize:14, fontWeight:600, marginBottom:12, color:T.gold }}>User Management</div>
+      <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+        <thead>
+          <tr style={{ color:T.muted, textAlign:"left" }}>
+            <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500 }}>User</th>
+            <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500 }}>Role</th>
+            <th style={{ padding:"6px 4px", borderBottom:`1px solid ${T.border}`, fontWeight:500 }}>Office</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.users.map(u => (
+            <tr key={u.userId}>
+              <td style={{ padding:"10px 4px", borderBottom:`1px solid ${T.border}` }}>
+                <div style={{ color:T.text }}>
+                  {[u.firstName, u.lastName].filter(Boolean).join(" ") || u.email}
+                  {u.isGod && <span style={{ marginLeft:8, fontSize:10, fontWeight:700, color:T.gold }}>GOD</span>}
+                </div>
+                <div style={{ fontSize:11, color:T.muted }}>{u.email}</div>
+              </td>
+              <td style={{ padding:"10px 4px", borderBottom:`1px solid ${T.border}` }}>
+                <select
+                  value={u.role}
+                  disabled={u.isGod || savingId===u.userId}
+                  onChange={e => updateUser(u.userId, { role: e.target.value })}
+                  style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${T.border}`, background:T.bg, color:T.text, fontFamily:T.font, fontSize:13 }}>
+                  <option value="rep">rep</option>
+                  <option value="manager">manager</option>
+                  {u.isGod && <option value="god">god</option>}
+                </select>
+              </td>
+              <td style={{ padding:"10px 4px", borderBottom:`1px solid ${T.border}` }}>
+                <select
+                  value={u.office || ""}
+                  disabled={u.isGod || savingId===u.userId}
+                  onChange={e => updateUser(u.userId, { office: e.target.value })}
+                  style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${T.border}`, background:T.bg, color:T.text, fontFamily:T.font, fontSize:13 }}>
+                  {data.offices.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
   );
 }
