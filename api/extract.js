@@ -24,21 +24,18 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // Forward all rate-limit headers so the client can pace itself precisely
-    // against Anthropic's actual quotas instead of guessing with fixed delays.
-    const HEADERS_TO_FORWARD = [
-      "retry-after",
-      "x-ratelimit-limit-requests",
-      "x-ratelimit-remaining-requests",
-      "x-ratelimit-reset-requests",
-      "x-ratelimit-limit-tokens",
-      "x-ratelimit-remaining-tokens",
-      "x-ratelimit-reset-tokens",
-    ];
-    for (const h of HEADERS_TO_FORWARD) {
-      const v = response.headers.get(h);
-      if (v) res.setHeader(h, v);
+    // Forward every rate-limit-related header so the client can pace itself.
+    // Anthropic uses `anthropic-ratelimit-*` naming; we also pass through
+    // any `x-ratelimit-*` and `retry-after` for forward compat.
+    const forwarded = [];
+    for (const [key, val] of response.headers.entries()) {
+      const k = key.toLowerCase();
+      if (k.startsWith("anthropic-ratelimit") || k.startsWith("x-ratelimit") || k === "retry-after") {
+        res.setHeader(key, val);
+        forwarded.push(key);
+      }
     }
+    console.log("[extract] forwarded headers:", forwarded.join(",") || "(none)");
 
     if (!response.ok) {
       console.error("Anthropic error:", JSON.stringify(data));

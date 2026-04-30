@@ -269,11 +269,22 @@ function parseResetHeader(value) {
 // firing as long as `remaining-*` is healthy. Only wait when one of the
 // budgets actually approaches depletion. For AP PDFs the token budget is
 // usually the binding constraint (each call consumes ~10–30K tokens).
+//
+// Anthropic header naming: `anthropic-ratelimit-{requests,tokens}-{limit,remaining,reset}`.
+// We also try the `x-ratelimit-*-*` shape for forward compatibility.
+function getHeader(resp, ...names) {
+  for (const n of names) {
+    const v = resp.headers.get(n);
+    if (v != null) return v;
+  }
+  return null;
+}
+
 function recordNextAllowed(resp) {
-  const reqRem = parseInt(resp.headers.get("x-ratelimit-remaining-requests") || "999", 10);
-  const tokRem = parseInt(resp.headers.get("x-ratelimit-remaining-tokens") || "999999", 10);
-  const reqResetMs = parseResetHeader(resp.headers.get("x-ratelimit-reset-requests"));
-  const tokResetMs = parseResetHeader(resp.headers.get("x-ratelimit-reset-tokens"));
+  const reqRem = parseInt(getHeader(resp, "anthropic-ratelimit-requests-remaining", "x-ratelimit-remaining-requests") || "999", 10);
+  const tokRem = parseInt(getHeader(resp, "anthropic-ratelimit-tokens-remaining", "x-ratelimit-remaining-tokens") || "999999", 10);
+  const reqResetMs = parseResetHeader(getHeader(resp, "anthropic-ratelimit-requests-reset", "x-ratelimit-reset-requests"));
+  const tokResetMs = parseResetHeader(getHeader(resp, "anthropic-ratelimit-tokens-reset", "x-ratelimit-reset-tokens"));
 
   let waitMs = 0;
   // Wait for token reset if we don't have headroom for another typical call
