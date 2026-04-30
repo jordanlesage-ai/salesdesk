@@ -188,15 +188,6 @@ function parseSpreadsheet(file) {
   });
 }
 
-function readArrayBuffer(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result);
-    reader.onerror = reject;
-    reader.readAsArrayBuffer(file);
-  });
-}
-
 function bufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -208,45 +199,82 @@ function bufferToBase64(buffer) {
 }
 
 // Some "PDFs" uploaded by clients are actually ZIP archives containing
-// per-page JPEGs and .txt files. For the AP format only pages 1, 11, 13,
-// and 14 carry data we need; pages 2–10 and 12 are individual product
-// category sheets that are almost entirely zeros. Skipping them cuts the
-// payload to Claude by roughly 80%.
-const NEEDED_PAGES = ["1.txt", "11.txt", "13.txt", "14.txt"];
+// per-page JPEGs and .txt files. The AP layout is fixed enough to parse
+// directly with regex — no AI call needed, instant + free + deterministic.
+//
+// - 1.txt:  client name, order date, rep info
+// - 11.txt: Résumé — every ordered item with quantity > 0
+// - 13.txt: grand total + first delivery date
+// - 14.txt: overflow / additional delivery dates (sometimes)
+function parseZipDirect(files) {
+  const decode = data => new TextDecoder().decode(data);
 
-function unzipTxtPages(buffer) {
-  const files = unzipSync(new Uint8Array(buffer));
-  const decoder = new TextDecoder();
-  const txtEntries = NEEDED_PAGES
-    .map(name => [name, files[name]])
-    .filter(([, data]) => data != null && data.length > 0);
+  // PAGE 1 — client + order date
+  const page1 = files["1.txt"] ? decode(files["1.txt"]) : "";
+  const clientMatch = page1.match(/Client\s*1\s*:\s*(.+?)(?:\s{2,}|Jordan|$)/m);
+  const client = clientMatch ? clientMatch[1].trim().replace(/\s+/g, " ") : "Unknown";
+  const dateMatch = page1.match(/Date\s*:\s*(\S+)/);
+  const date = sanitizeDate(dateMatch?.[1]?.trim()) || todayStr();
+  const orderYear = parseInt(date.slice(0, 4), 10);
 
-  if (!txtEntries.length) {
-    throw new Error("ZIP archive missing required pages (1, 11, 13, 14)");
+  // PAGE 11 — items with non-zero total qty at end of line
+  const page11 = files["11.txt"] ? decode(files["11.txt"]) : "";
+  const items = [];
+  for (const line of page11.split(/\r?\n/)) {
+    // CODE  Product name  ...  price $  qty cols  total
+    const m = line.match(/^[A-Z0-9]{4,}\s+(.+?)\s+[\d,]+\.\d{2}\s*\$\s+[\d\s]+\b([1-9]\d*)\s*$/);
+    if (m) items.push(m[1].trim().replace(/\s+/g, " "));
   }
 
-  return txtEntries
-    .map(([name, data]) => `--- Page ${name.replace(".txt", "")} ---\n${decoder.decode(data)}`)
-    .join("\n\n");
+  // PAGES 13 + 14 — grand total (largest line) and delivery date
+  let total = 0;
+  let deliveryDate = null;
+  for (const pageKey of ["13.txt", "14.txt"]) {
+    if (!files[pageKey]) continue;
+    const text = decode(files[pageKey]);
+    for (const line of text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)) {
+      const totalMatch = line.match(/^([\d,]+\.\d{2})\s*\$$/);
+      if (totalMatch) {
+        const val = parseFloat(totalMatch[1].replace(/,/g, ""));
+        if (val > total) total = val;
+      }
+      if (!deliveryDate && /jour|soir|apr/i.test(line) && !/jj\/mm/i.test(line)) {
+        const datePart = line.replace(/\s*(jour|soir|apr[eè]s?\s*\d*[Hh]?)\s*.*/i, "").trim();
+        if (datePart) deliveryDate = sanitizeDate(datePart, orderYear);
+      }
+    }
+    if (deliveryDate) break;
+  }
+
+  return { client, date, deliveryDate, total, items };
+}
+
+async function callExtractAPI(body) {
+  const headers = { "Content-Type": "application/json" };
+  const bodyStr = JSON.stringify(body);
+
+  let resp = await fetch("/api/extract", { method:"POST", headers, body: bodyStr });
+
+  // On 429, wait exactly the Retry-After window and try once more.
+  if (resp.status === 429) {
+    const retryAfter = parseInt(resp.headers.get("retry-after") || "20", 10) || 20;
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
+    resp = await fetch("/api/extract", { method:"POST", headers, body: bodyStr });
+  }
+
+  if (!resp.ok) throw new Error(`API error ${resp.status}`);
+  return parseResponse(await resp.json());
 }
 
 /* ─── AI Extraction ─── */
 // NOTE: Uses /api/extract so the API key stays server-side (Vercel function)
-const SYS_PROMPT = `You are a sales document parser for Alimentation Première meat-order documents. Input arrives in one of two formats:
+const SYS_PROMPT = `You are a sales document parser. Return ONLY a JSON object with these exact keys:
 
-A) EXCEL workbooks: sections separated by "=== Sheet: <name> ===" headers. Sheets named "Entente", "Fiche Client", and "Résumé".
-
-B) DOCUMENT TEXT extracted from a ZIP archive of per-page .txt files: sections separated by "--- Page N ---" headers. Page 1 holds the Entente data (client + order date). Later pages hold product/résumé data with rows like "CODE  Description  Format  Price  [qty per delivery]  Total $" and running "Sous-total: X,XXX.XX $" lines.
-
-Return ONLY a JSON object with these exact keys:
-
-- client (string): EXCEL — "Entente" sheet, value next to (right of or below) "Client 1:". ZIP — Page 1 next to "Client 1:".
-- date (string): EXCEL — "Entente" sheet, value next to "Date:". ZIP — Page 1 next to "Date:". Format DD-MM-YYYY (convert from jj/mm/aaaa or any other).
-- deliveryDate (string or null): EXCEL — "Fiche Client" sheet, value next to "1e livraison le:". ZIP — any page where this label appears. Format DD-MM-YYYY. Null if not present.
-- total (number): the GRAND TOTAL across all deliveries combined. EXCEL — the numeric value at "vente totale :" in "Fiche Client". ZIP — prefer a "vente totale" line if present; otherwise SUM every "Sous-total: X,XXX.XX $" line across all pages. No currency symbols, no thousand separators.
-- items (array of strings): every product whose quantity is > 0. EXCEL — "Résumé" sheet column 2 where AT LEAST ONE of the four numeric qty columns to its right is > 0; use the column-2 name. ZIP — product rows on pages 2+ where any per-delivery qty is > 0; use the description text. Skip products with all-zero quantities and skip header rows.
-
-If the document matches neither AP format (generic PDF, single-sheet CSV, etc.), fall back to extracting the same five fields from wherever they appear.
+- client (string)
+- date (string, DD-MM-YYYY — convert from any other date format)
+- deliveryDate (string DD-MM-YYYY, or null if not present)
+- total (number, no currency symbols, no thousand separators)
+- items (array of strings — each ordered product, skip zero-quantity rows)
 
 Return ONLY valid JSON. No markdown fences, no explanation, no extra keys.`;
 
@@ -267,54 +295,53 @@ function parseResponse(data) {
   };
 }
 
-async function extractFromFile(file) {
+async function extractFromFile(file, onProgress) {
   const name = (file.name || "").toLowerCase();
   const ext = (name.match(/\.([^.]+)$/) || [])[1] || "";
   const typeStr = file.type || "";
 
-  let messages;
-
   // Spreadsheets first — XLSX is internally a ZIP, so route by extension/MIME
   // before doing magic-byte detection or it would be mis-classified as a ZIP.
   if (ext === "xlsx" || ext === "xls" || ext === "csv" || /excel|spreadsheet|csv/.test(typeStr)) {
+    onProgress?.("🤖 Extracting...");
     const csv = await parseSpreadsheet(file);
-    messages = [{ role:"user", content:`Extract the sales order data from this spreadsheet CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }];
-  } else {
-    const buffer = await readArrayBuffer(file);
-    const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
-    // ZIP magic: 50 4B 03 04
-    const isZip = head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04;
-    // PDF magic: 25 50 44 46 ("%PDF")
-    const isRealPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+    return callExtractAPI({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      system: SYS_PROMPT,
+      messages: [{ role:"user", content:`Extract sales order data from this CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }],
+    });
+  }
 
-    if (isZip) {
-      const text = unzipTxtPages(buffer);
-      messages = [{ role:"user", content:`Extract the sales order data from this document text:\n\n${text}\n\nReturn ONLY a JSON object.` }];
-    } else if (isRealPdf) {
-      const b64 = bufferToBase64(buffer);
-      messages = [{ role:"user", content:[
+  const arrayBuf = await file.arrayBuffer();
+  const head = new Uint8Array(arrayBuf, 0, Math.min(4, arrayBuf.byteLength));
+  // ZIP magic: 50 4B 03 04
+  const isZip = head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04;
+  // PDF magic: 25 50 44 46 ("%PDF")
+  const isRealPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+
+  if (isZip) {
+    // AP client files — parse structured .txt pages directly, NO API call.
+    onProgress?.("📖 Reading file...");
+    const files = unzipSync(new Uint8Array(arrayBuf));
+    return parseZipDirect(files);
+  }
+
+  if (isRealPdf) {
+    onProgress?.("🤖 Extracting...");
+    const b64 = bufferToBase64(arrayBuf);
+    return callExtractAPI({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      system: SYS_PROMPT,
+      messages: [{ role:"user", content:[
         { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
-        { type:"text", text:"Extract the sales order data from this document. Return ONLY a JSON object." }
-      ]}];
-    } else {
-      throw new Error("Unrecognized file format (not a PDF, ZIP, or spreadsheet)");
-    }
+        { type:"text", text:"Extract the sales order data. Return ONLY a JSON object." }
+      ]}],
+    });
   }
 
-  const headers = { "Content-Type": "application/json" };
-  const body = JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens:1000, system:SYS_PROMPT, messages });
-
-  let resp = await fetch("/api/extract", { method:"POST", headers, body });
-
-  // On 429, wait exactly the Retry-After window and try once more.
-  if (resp.status === 429) {
-    const retryAfter = parseInt(resp.headers.get("retry-after") || "20", 10) || 20;
-    await new Promise(r => setTimeout(r, retryAfter * 1000));
-    resp = await fetch("/api/extract", { method:"POST", headers, body });
-  }
-
-  if (!resp.ok) throw new Error(`API error ${resp.status}`);
-  return parseResponse(await resp.json());
+  throw new Error("Unrecognized file format (not a PDF, ZIP, or spreadsheet)");
 }
 
 /* ─── Reusable Atoms ─── */
