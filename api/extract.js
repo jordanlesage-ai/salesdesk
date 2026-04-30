@@ -24,6 +24,10 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
+    // Forward Retry-After so the client can honor Anthropic's backoff window
+    const retryAfter = response.headers.get("retry-after");
+    if (retryAfter) res.setHeader("Retry-After", retryAfter);
+
     if (!response.ok) {
       console.error("Anthropic error:", JSON.stringify(data));
       return res.status(response.status).json(data);

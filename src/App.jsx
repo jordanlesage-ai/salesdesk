@@ -55,11 +55,11 @@ function tokenize(s) {
   return s.match(/\d+|[A-Za-z\u00C0-\u024F]+/g) || [];
 }
 
-function sanitizeDate(raw) {
+function sanitizeDate(raw, yearHint) {
   if (raw == null || raw === "") return null;
   const s = String(raw).trim().replace(/\s+/g, " ");
   if (!s) return null;
-  const yr = new Date().getFullYear();
+  const yr = yearHint || new Date().getFullYear();
 
   // 1. Already ISO YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) { const r = buildIso(...s.split("-")); if (r) return r; }
@@ -245,7 +245,22 @@ If the document matches neither AP format (generic PDF, single-sheet CSV, etc.),
 
 Return ONLY valid JSON. No markdown fences, no explanation, no extra keys.`;
 
-const MAX_RETRIES = 3;
+function parseResponse(data) {
+  if (!data.content || !data.content[0] || data.content[0].type !== "text") {
+    throw new Error("Unexpected API response structure");
+  }
+  const text = data.content[0].text.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(text);
+  const orderDate = sanitizeDate(parsed.date);
+  const orderYear = orderDate ? parseInt(orderDate.slice(0, 4), 10) : new Date().getFullYear();
+  return {
+    client:       parsed.client || "Unknown",
+    date:         orderDate || todayStr(),
+    deliveryDate: sanitizeDate(parsed.deliveryDate, orderYear) || null,
+    total:        Number(String(parsed.total || 0).replace(/,/g, "").replace(/\s*\$/, "").trim()) || 0,
+    items:        Array.isArray(parsed.items) ? parsed.items : [],
+  };
+}
 
 async function extractFromFile(file) {
   const name = (file.name || "").toLowerCase();
@@ -281,29 +296,20 @@ async function extractFromFile(file) {
     }
   }
 
-  const resp = await fetch("/api/extract", {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens:1000, system:SYS_PROMPT, messages })
-  });
+  const headers = { "Content-Type": "application/json" };
+  const body = JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens:1000, system:SYS_PROMPT, messages });
 
-  if (!resp.ok) throw new Error(`API error ${resp.status}`);
-  const data = await resp.json();
+  let resp = await fetch("/api/extract", { method:"POST", headers, body });
 
-  if (!data.content || !data.content[0] || data.content[0].type !== "text") {
-    throw new Error("Unexpected API response structure");
+  // On 429, wait the Retry-After window (+1s buffer) and try once more.
+  if (resp.status === 429) {
+    const retryAfter = parseInt(resp.headers.get("retry-after") || "15", 10) || 15;
+    await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+    resp = await fetch("/api/extract", { method:"POST", headers, body });
   }
 
-  const raw = data.content[0].text.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"").trim();
-  const parsed = JSON.parse(raw);
-
-  return {
-    client:       parsed.client || "Unknown",
-    date:         sanitizeDate(parsed.date) || todayStr(),
-    deliveryDate: sanitizeDate(parsed.deliveryDate) || null,
-    total:        Number(String(parsed.total || 0).replace(/[$,\s]/g,"")) || 0,
-    items:        Array.isArray(parsed.items) ? parsed.items : [],
-  };
+  if (!resp.ok) throw new Error(`API error ${resp.status}`);
+  return parseResponse(await resp.json());
 }
 
 /* ─── Reusable Atoms ─── */
@@ -440,40 +446,29 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
     setFiles(prev => {
       const exists = prev.find(e => e.name === name);
       if (exists) return prev.map(e => e.name===name ? {...e, status:"processing"} : e);
-      return [...prev, { name, status:"processing", file, attempts:0 }];
+      return [...prev, { name, status:"processing", file }];
     });
 
-    let attempt = 0;
-    while (attempt < MAX_RETRIES) {
+    // Single attempt — extractFromFile handles its own one-shot 429 retry.
+    // On any other failure, fall back to a placeholder so the file is not lost.
+    try {
+      const data = await extractFromFile(file);
+      await onOrderAdded({ fileName: name, ...data });
+      setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done"} : e));
+    } catch (err) {
       try {
-        const data = await extractFromFile(file);
-        await onOrderAdded({ fileName: name, ...data });
+        const fallback = {
+          fileName: name,
+          client: name.replace(/_pdf\.pdf$/i, "").replace(/_/g, " "),
+          date: todayStr(),
+          deliveryDate: null,
+          total: 0,
+          items: ["⚠️ Extraction failed — edit manually"],
+        };
+        await onOrderAdded(fallback);
         setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done"} : e));
-        return;
-      } catch(err) {
-        attempt++;
-        if (attempt < MAX_RETRIES) {
-          setFiles(prev => prev.map(e => e.name===name ? {...e, status:"processing", attempts:attempt} : e));
-          // Exponential backoff: 1.5s, 3s, 6s
-          const wait = 1500 * Math.pow(2, attempt - 1);
-          await new Promise(res => setTimeout(res, wait));
-        } else {
-          // All retries exhausted — save a placeholder order so the file is never lost
-          try {
-            const fallback = {
-              fileName: name,
-              client: name.replace(/_pdf\.pdf$/i, "").replace(/_/g, " "),
-              date: todayStr(),
-              deliveryDate: null,
-              total: 0,
-              items: ["⚠️ Extraction failed — edit manually"],
-            };
-            await onOrderAdded(fallback);
-            setFiles(prev => prev.map(e => e.name===name ? {...e, status:"done"} : e));
-          } catch (saveErr) {
-            setFiles(prev => prev.map(e => e.name===name ? {...e, status:"error", attempts:attempt} : e));
-          }
-        }
+      } catch (saveErr) {
+        setFiles(prev => prev.map(e => e.name===name ? {...e, status:"error"} : e));
       }
     }
   }, [onOrderAdded, setFiles]);
@@ -500,7 +495,7 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
   const enqueueFile = useCallback((file) => {
     setFiles(prev => {
       if (prev.find(e => e.name === file.name)) return prev;
-      return [...prev, { name: file.name, status: "pending", file, attempts: 0 }];
+      return [...prev, { name: file.name, status: "pending", file }];
     });
     queueRef.current.push(file);
     runQueue();
@@ -547,11 +542,11 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
           <div style={dotStyle(f.status)}/>
           <span style={{ flex:1, color:T.text, fontSize:14, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
           {f.status === "error"
-            ? <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed after {MAX_RETRIES} attempts</span>
+            ? <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed</span>
             : f.status === "pending"
             ? <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>Pending</span>
             : <span style={{ fontSize:12, color:f.status==="done" ? T.upcoming : T.gold, fontWeight:600 }}>
-                {f.status==="done" ? "Extracted" : f.attempts > 0 ? `Retry ${f.attempts}/${MAX_RETRIES-1}…` : "Processing…"}
+                {f.status==="done" ? "Extracted" : "Processing…"}
               </span>
           }
         </div>
