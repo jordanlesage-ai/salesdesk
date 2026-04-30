@@ -281,7 +281,7 @@ function recordNextAllowed(resp) {
   // Wait for request reset if we're nearly out of request budget
   if (reqRem < 3 && reqResetMs != null) waitMs = Math.max(waitMs, reqResetMs);
 
-  console.log("[ratelimit]", { reqRem, tokRem, reqResetMs, tokResetMs, computedWaitMs: waitMs });
+  console.log("[ratelimit]", JSON.stringify({ reqRem, tokRem, reqResetMs, tokResetMs, computedWaitMs: waitMs }));
 
   // 500ms buffer cushions clock skew. waitMs of 0 means fire immediately.
   window._nextAllowedRequest = Date.now() + waitMs + (waitMs > 0 ? 500 : 0);
@@ -355,7 +355,7 @@ async function extractFromFile(file, onProgress) {
     const csv = await parseSpreadsheet(file);
     return callExtractAPI({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
+      max_tokens: 300,
       system: SYS_PROMPT,
       messages: [{ role:"user", content:`Extract sales order data from this CSV:\n\n${csv}\n\nReturn ONLY a JSON object.` }],
     }, onProgress);
@@ -381,7 +381,7 @@ async function extractFromFile(file, onProgress) {
     const b64 = bufferToBase64(arrayBuf);
     return callExtractAPI({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
+      max_tokens: 300,
       system: SYS_PROMPT,
       messages: [{ role:"user", content:[
         { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
