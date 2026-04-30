@@ -281,18 +281,22 @@ function getHeader(resp, ...names) {
 }
 
 function recordNextAllowed(resp) {
-  const reqRem = parseInt(getHeader(resp, "anthropic-ratelimit-requests-remaining", "x-ratelimit-remaining-requests") || "999", 10);
-  const tokRem = parseInt(getHeader(resp, "anthropic-ratelimit-tokens-remaining", "x-ratelimit-remaining-tokens") || "999999", 10);
-  const reqResetMs = parseResetHeader(getHeader(resp, "anthropic-ratelimit-requests-reset", "x-ratelimit-reset-requests"));
-  const tokResetMs = parseResetHeader(getHeader(resp, "anthropic-ratelimit-tokens-reset", "x-ratelimit-reset-tokens"));
+  // Anthropic has FOUR rate-limit buckets per tier:
+  //   Requests, Input-Tokens, Output-Tokens, Tokens (combined).
+  // For AP PDFs (~99% input, tiny JSON response) the binding constraint is
+  // Input-Tokens — depletes ~5x faster than the combined Tokens bucket.
+  const reqRem      = parseInt(getHeader(resp, "anthropic-ratelimit-requests-remaining", "x-ratelimit-remaining-requests") || "999", 10);
+  const inputTokRem = parseInt(getHeader(resp, "anthropic-ratelimit-input-tokens-remaining", "x-ratelimit-remaining-tokens") || "999999", 10);
+  const reqResetMs   = parseResetHeader(getHeader(resp, "anthropic-ratelimit-requests-reset", "x-ratelimit-reset-requests"));
+  const inputResetMs = parseResetHeader(getHeader(resp, "anthropic-ratelimit-input-tokens-reset", "x-ratelimit-reset-tokens"));
 
   let waitMs = 0;
-  // Wait for token reset if we don't have headroom for another typical call
-  if (tokRem < 20000 && tokResetMs != null) waitMs = Math.max(waitMs, tokResetMs);
-  // Wait for request reset if we're nearly out of request budget
+  // Wait for input-token reset if not enough headroom for another typical PDF call
+  if (inputTokRem < 30000 && inputResetMs != null) waitMs = Math.max(waitMs, inputResetMs);
+  // Wait for request reset if nearly out of request budget
   if (reqRem < 3 && reqResetMs != null) waitMs = Math.max(waitMs, reqResetMs);
 
-  console.log("[ratelimit]", JSON.stringify({ reqRem, tokRem, reqResetMs, tokResetMs, computedWaitMs: waitMs }));
+  console.log("[ratelimit]", JSON.stringify({ reqRem, inputTokRem, reqResetMs, inputResetMs, computedWaitMs: waitMs }));
 
   // 500ms buffer cushions clock skew. waitMs of 0 means fire immediately.
   window._nextAllowedRequest = Date.now() + waitMs + (waitMs > 0 ? 500 : 0);
