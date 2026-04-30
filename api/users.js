@@ -33,8 +33,17 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
-      const list = await clerk.users.getUserList({ limit: 200 });
-      const users = (list.data || list).map(shape);
+      const PAGE = 200;
+      const all = [];
+      let offset = 0;
+      while (true) {
+        const page = await clerk.users.getUserList({ limit: PAGE, offset });
+        const batch = page.data || page;
+        all.push(...batch);
+        if (batch.length < PAGE) break;
+        offset += PAGE;
+      }
+      const users = all.map(shape);
       users.sort((a, b) => a.email.localeCompare(b.email));
       return res.status(200).json({ users, offices: VALID_OFFICES });
     }

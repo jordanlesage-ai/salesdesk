@@ -161,20 +161,25 @@ function parseSpreadsheet(file) {
     reader.onload = e => {
       try {
         const wb = XLSX.read(e.target.result, { type:"array", cellDates:false, cellNF:true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-        const rows = [];
-        for (let r = range.s.r; r <= range.e.r; r++) {
-          const row = [];
-          for (let c = range.s.c; c <= range.e.c; c++) {
-            const addr = XLSX.utils.encode_cell({r,c});
-            const cell = ws[addr];
-            if (!cell) { row.push(""); continue; }
-            row.push(isDateSerial(cell.v, cell) ? excelSerialToDate(cell.v) : cell.v != null ? String(cell.v) : "");
+        const sections = wb.SheetNames.map(name => {
+          const ws = wb.Sheets[name];
+          if (!ws || !ws["!ref"]) return `=== Sheet: ${name} ===\n(empty)`;
+          const range = XLSX.utils.decode_range(ws["!ref"]);
+          const rows = [];
+          for (let r = range.s.r; r <= range.e.r; r++) {
+            const row = [];
+            for (let c = range.s.c; c <= range.e.c; c++) {
+              const addr = XLSX.utils.encode_cell({r,c});
+              const cell = ws[addr];
+              if (!cell) { row.push(""); continue; }
+              row.push(isDateSerial(cell.v, cell) ? excelSerialToDate(cell.v) : cell.v != null ? String(cell.v) : "");
+            }
+            rows.push(row);
           }
-          rows.push(row);
-        }
-        resolve(rows.map(r => r.map(v => `"${v.replace(/"/g,'""')}"`).join(",")).join("\n"));
+          const csv = rows.map(r => r.map(v => `"${v.replace(/"/g,'""')}"`).join(",")).join("\n");
+          return `=== Sheet: ${name} ===\n${csv}`;
+        });
+        resolve(sections.join("\n\n"));
       } catch(err) { reject(err); }
     };
     reader.onerror = reject;
@@ -193,13 +198,17 @@ function readBase64(file) {
 
 /* ─── AI Extraction ─── */
 // NOTE: Uses /api/extract so the API key stays server-side (Vercel function)
-const SYS_PROMPT = `You are a sales document parser. Extract order data and return ONLY a JSON object with these exact keys:
-- client (string)
-- date (string, ALWAYS format as DD-MM-YYYY — convert whatever date format you find in the document to DD-MM-YYYY)
-- deliveryDate (string or null — look for ANY delivery/livraison/ship/expédition/prévu date and return it as DD-MM-YYYY, or null if not found)
-- total (number, no currency symbols)
-- items (array of strings describing the products or services ordered)
-Return ONLY valid JSON. No markdown, no explanation, no extra keys.`;
+const SYS_PROMPT = `You are a sales document parser for Alimentation Première meat-order Excel workbooks. Spreadsheet input is provided as multiple sections separated by "=== Sheet: <name> ===" headers. Return ONLY a JSON object with these exact keys:
+
+- client (string): from the "Entente" sheet, the value in the cell to the right of (or just below) the row labeled "Client 1:".
+- date (string): from the "Entente" sheet, the value next to the row labeled "Date:". Format as DD-MM-YYYY (convert from jj/mm/aaaa or any other format).
+- deliveryDate (string or null): from the "Fiche Client" sheet, the value next to the row labeled "1e livraison le:". Format as DD-MM-YYYY. Return null if not present.
+- total (number): from the "Fiche Client" sheet, the numeric value in the cell labeled "vente totale :". No currency symbols, no thousand separators.
+- items (array of strings): from the "Résumé" sheet, every product whose product name appears in column 2 AND for which AT LEAST ONE of the four quantity columns immediately to the right (the four numeric columns) is greater than 0. Use the column-2 product name as the string. Skip products where all four quantity columns are 0, blank, or non-numeric. Skip header rows.
+
+If the document is NOT an Alimentation Première multi-sheet workbook (e.g. a generic PDF, a single-sheet CSV, or a sheet whose names don't match), fall back to extracting the same five fields from wherever they appear in the document.
+
+Return ONLY valid JSON. No markdown fences, no explanation, no extra keys.`;
 
 const MAX_RETRIES = 3;
 
@@ -400,11 +409,21 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
   }, [onOrderAdded, setFiles]);
 
   const process = useCallback(async (newFiles) => {
+    // Enqueue every file immediately as "pending" so the whole batch is visible
+    setFiles(prev => {
+      const existing = new Set(prev.map(e => e.name));
+      const additions = newFiles
+        .filter(f => !existing.has(f.name))
+        .map(f => ({ name: f.name, status: "pending", file: f, attempts: 0 }));
+      return [...prev, ...additions];
+    });
+
+    // Process them one at a time; processOne flips each from pending → processing
     for (let i = 0; i < newFiles.length; i++) {
       if (i > 0) await new Promise(res => setTimeout(res, 1000));
       await processOne(newFiles[i]);
     }
-  }, [processOne]);
+  }, [processOne, setFiles]);
 
   const onDrop = useCallback(e => {
     e.preventDefault(); setDragging(false);
@@ -422,7 +441,7 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
 
   const dotStyle = s => ({
     width:10, height:10, borderRadius:"50%", flexShrink:0,
-    background: s==="done" ? T.upcoming : s==="error" ? T.overdue : T.gold,
+    background: s==="done" ? T.upcoming : s==="error" ? T.overdue : s==="pending" ? T.muted : T.gold,
     animation: s==="processing" ? "pulse 1s infinite" : "none",
   });
 
@@ -448,6 +467,8 @@ function UploadTab({ onOrderAdded, files, setFiles }) {
           <span style={{ flex:1, color:T.text, fontSize:14, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
           {f.status === "error"
             ? <span style={{ fontSize:12, color:T.overdue, fontWeight:600 }}>Failed after {MAX_RETRIES} attempts</span>
+            : f.status === "pending"
+            ? <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>Pending</span>
             : <span style={{ fontSize:12, color:f.status==="done" ? T.upcoming : T.gold, fontWeight:600 }}>
                 {f.status==="done" ? "Extracted" : f.attempts > 0 ? `Retry ${f.attempts}/${MAX_RETRIES-1}…` : "Processing…"}
               </span>
