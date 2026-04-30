@@ -270,11 +270,11 @@ async function callExtractAPI(body) {
 // NOTE: Uses /api/extract so the API key stays server-side (Vercel function)
 const SYS_PROMPT = `You are a sales document parser. Return ONLY a JSON object with these exact keys:
 
-- client (string)
-- date (string, DD-MM-YYYY — convert from any other date format)
-- deliveryDate (string DD-MM-YYYY, or null if not present)
-- total (number, no currency symbols, no thousand separators)
-- items (array of strings — each ordered product, skip zero-quantity rows)
+- client (string) — buyer name; usually labeled "Client", "Customer", or "Client 1"
+- date (string, DD-MM-YYYY) — order date; labeled "Date" or "Order Date". Convert from any source format.
+- deliveryDate (string DD-MM-YYYY, or null) — labeled "Delivery", "Livraison", "1e livraison le", or "Ship Date"
+- total (number, no currency symbols, no thousand separators) — labeled "Total", "Grand Total", or "Vente totale". If multiple subtotals appear, use the grand total.
+- items (array of strings) — each ordered product line; skip rows where quantity is 0 or blank
 
 Return ONLY valid JSON. No markdown fences, no explanation, no extra keys.`;
 
