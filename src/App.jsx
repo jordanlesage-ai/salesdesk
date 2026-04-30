@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { unzipSync, strFromU8 } from "fflate";
+import { unzipSync } from "fflate";
 import { SignIn, SignedIn, SignedOut, UserButton, useAuth } from "@clerk/clerk-react";
 
 /* ─── Google Font ─── */
@@ -208,21 +208,26 @@ function bufferToBase64(buffer) {
 }
 
 // Some "PDFs" uploaded by clients are actually ZIP archives containing
-// per-page JPEGs and .txt files (one per page). Extract the .txt files
-// in numeric filename order and concatenate as labeled pages.
+// per-page JPEGs and .txt files. For the AP format only pages 1, 11, 13,
+// and 14 carry data we need; pages 2–10 and 12 are individual product
+// category sheets that are almost entirely zeros. Skipping them cuts the
+// payload to Claude by roughly 80%.
+const NEEDED_PAGES = ["1.txt", "11.txt", "13.txt", "14.txt"];
+
 function unzipTxtPages(buffer) {
   const files = unzipSync(new Uint8Array(buffer));
-  const pages = Object.entries(files)
-    .filter(([name]) => /\.txt$/i.test(name))
-    .map(([name, data]) => {
-      const m = name.match(/(\d+)/);
-      return { num: m ? parseInt(m[1], 10) : 9999, text: strFromU8(data) };
-    })
-    .sort((a, b) => a.num - b.num);
+  const decoder = new TextDecoder();
+  const txtEntries = NEEDED_PAGES
+    .map(name => [name, files[name]])
+    .filter(([, data]) => data != null && data.length > 0);
 
-  if (!pages.length) throw new Error("ZIP archive contains no .txt page files");
+  if (!txtEntries.length) {
+    throw new Error("ZIP archive missing required pages (1, 11, 13, 14)");
+  }
 
-  return pages.map(p => `\n\n--- Page ${p.num} ---\n${p.text}`).join("");
+  return txtEntries
+    .map(([name, data]) => `--- Page ${name.replace(".txt", "")} ---\n${decoder.decode(data)}`)
+    .join("\n\n");
 }
 
 /* ─── AI Extraction ─── */
