@@ -6,9 +6,9 @@ export const DEFAULT_OFFICE = "beloeil";
 const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 const AUTHORIZED_PARTIES = [
+  "https://salesdesk-five.vercel.app",
   "http://localhost:5173",
   "http://localhost:4173",
-  // Vercel preview + prod URLs are also accepted; Clerk verifies origin separately.
 ];
 
 function normalize(email) {
