@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { SignIn, SignedIn, SignedOut, UserButton, useAuth, useUser } from "@clerk/clerk-react";
+import { SignIn, SignedIn, SignedOut, UserButton, useAuth } from "@clerk/clerk-react";
 
 /* ─── Google Font ─── */
 const fontLink = document.createElement("link");
@@ -840,7 +840,6 @@ function SignInScreen() {
 
 function AuthedApp() {
   const { getToken } = useAuth();
-  const { user } = useUser();
   const [me, setMe] = useState(null);
   const [orders, setOrders] = useState([]);
   const [tab, setTab] = useState("Upload");
@@ -865,15 +864,6 @@ function AuthedApp() {
     if (resp.status === 204) return null;
     return resp.json();
   }, [getToken]);
-
-  const reloadOrders = useCallback(async () => {
-    try {
-      const data = await apiFetch("/api/orders");
-      setOrders(data || []);
-    } catch (e) {
-      setError(e.message);
-    }
-  }, [apiFetch]);
 
   useEffect(() => {
     let cancelled = false;
