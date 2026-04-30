@@ -928,7 +928,7 @@ function AuthedApp() {
     return <FullScreenMsg msg="Loading…"/>;
   }
   if (error) {
-    return <FullScreenMsg msg={`Error: ${error}`} sub="Check that env vars are set on Vercel: VITE_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN"/>;
+    return <FullScreenMsg msg={`Error: ${error}`} sub="Check that env vars are set on Vercel: VITE_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, KV_REST_API_URL, KV_REST_API_TOKEN"/>;
   }
 
   return (
